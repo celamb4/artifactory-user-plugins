@@ -44,6 +44,7 @@ import javax.ws.rs.core.*
 @Field final String HOME_PAGE_URL = 'WSS-Homepage'
 @Field final String LICENSES = 'WSS-Licenses'
 @Field final String VULNERABILITY = 'WSS-Vulnerability: '
+@Field final String VULNERABILITY_SEVERITY = 'WSS-Vulnerability-Severity: '
 @Field final String CVE_URL = 'https://cve.mitre.org/cgi-bin/cvename.cgi?name='
 
 @Field final String PROPERTIES_FILE_PATH = 'plugins/whitesource-artifactory-plugin.properties'
@@ -153,7 +154,8 @@ storage {
                 Collection<VulnerabilityInfo> vulns = resource.getVulnerabilities()
                 for (VulnerabilityInfo vulnerabilityInfo : vulns) {
                     String vulnName = vulnerabilityInfo.getName()
-                    repositories.setProperty(repoPath, VULNERABILITY + vulnName, "${vulnerabilityInfo.getSeverity()}, ${CVE_URL}${vulnName}")
+                    repositories.setProperty(repoPath, VULNERABILITY + vulnName, "${CVE_URL}${vulnName}")
+                    repositories.setProperty(repoPath, VULNERABILITY_SEVERITY + vulnName, "${vulnerabilityInfo.getSeverity()}")
                 }
                 Collection<String> licenses = resource.getLicenses()
                 String dataLicenses = BLANK
