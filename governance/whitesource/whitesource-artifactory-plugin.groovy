@@ -56,6 +56,7 @@ import javax.ws.rs.core.*
 @Field final String PROJECT_NAME = 'ArtifactoryDependencies'
 @Field final String BLANK = ''
 @Field final String DEFAULT_SERVICE_URL = 'https://saas.whitesourcesoftware.com/agent'
+@Field final int DEFAULT_CONNECTION_TIMEOUT_MINUTES = 60
 
 /**
  * This is a plug-in that integrates Artifactory with WhiteSource
@@ -82,7 +83,7 @@ jobs {
      * Examples :
      * "0 42 9 * * ?"  - Build a trigger that will fire daily at 9:42 am
      * "0 0/2 8-17 * * ?" - Build a trigger that will fire every other minute, between 8am and 5pm, every day
-    */
+     */
     updateRepoWithWhiteSource(cron: "0 10 18 * * ?") {
         log.info("Starting job updateRepoData With WhiteSource")
         def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
@@ -122,90 +123,105 @@ storage {
     }
 }
 
-    /* --- Private Methods --- */
+/* --- Private Methods --- */
 
-     private void checkPolicies(Map<String, PolicyCheckResourceNode> projects, Map<String, ItemInfo> sha1ToItemMap){
-         for (String key : projects.keySet()) {
-             PolicyCheckResourceNode policyCheckResourceNode = projects.get(key);
-             Collection<PolicyCheckResourceNode> children = policyCheckResourceNode.getChildren();
-             for (PolicyCheckResourceNode child : children) {
-                 ItemInfo item = sha1ToItemMap.get(child.getResource().getSha1())
-                 if (item != null && child.getPolicy() != null){
-                     def path = item.getRepoPath()
-                     repositories.setProperty(path, ACTION, child.getPolicy().getActionType())
-                     repositories.setProperty(path, POLICY_DETAILS, child.getPolicy().getDisplayName())
-                 }
-             }
-         }
-     }
-
-    private updateItemsExtraData(GetDependencyDataResult dependencyDataResult, Map<String, ItemInfo> sha1ToItemMap){
-        for (ResourceInfo resource : dependencyDataResult.getResources()) {
-            ItemInfo item = sha1ToItemMap.get(resource.getSha1())
-            if (item != null) {
-                RepoPath repoPath = item.getRepoPath()
-                if (!BLANK.equals(resource.getDescription())) {
-                    repositories.setProperty(repoPath, DESCRIPTION, resource.getDescription())
-                }
-                if (!BLANK.equals(resource.getHomepageUrl())) {
-                    repositories.setProperty(repoPath, HOME_PAGE_URL, resource.getHomepageUrl())
-                }
-
-                Collection<VulnerabilityInfo> vulns = resource.getVulnerabilities()
-                for (VulnerabilityInfo vulnerabilityInfo : vulns) {
-                    String vulnName = vulnerabilityInfo.getName()
-                    repositories.setProperty(repoPath, VULNERABILITY + vulnName, "${CVE_URL}${vulnName}")
-                    repositories.setProperty(repoPath, VULNERABILITY_SEVERITY + vulnName, "${vulnerabilityInfo.getSeverity()}")
-                }
-                Collection<String> licenses = resource.getLicenses()
-                String dataLicenses = BLANK
-                for (String license : licenses) {
-                    dataLicenses += license + ", "
-                }
-                if (dataLicenses.size() > 0) {
-                    dataLicenses = dataLicenses.substring(0, dataLicenses.size() - 2)
-                    repositories.setProperty(repoPath, LICENSES, dataLicenses)
-                }
+private void checkPolicies(Map<String, PolicyCheckResourceNode> projects, Map<String, ItemInfo> sha1ToItemMap){
+    for (String key : projects.keySet()) {
+        PolicyCheckResourceNode policyCheckResourceNode = projects.get(key);
+        Collection<PolicyCheckResourceNode> children = policyCheckResourceNode.getChildren();
+        for (PolicyCheckResourceNode child : children) {
+            ItemInfo item = sha1ToItemMap.get(child.getResource().getSha1())
+            if (item != null && child.getPolicy() != null){
+                def path = item.getRepoPath()
+                repositories.setProperty(path, ACTION, child.getPolicy().getActionType())
+                repositories.setProperty(path, POLICY_DETAILS, child.getPolicy().getDisplayName())
             }
         }
     }
+}
 
-    private void findAllRepoItems(def repoPath, Map<String, ItemInfo> sha1ToItemMap) {
-        for (ItemInfo item : repositories.getChildren(repoPath)) {
-            if (item.isFolder()) {
-                findAllRepoItems(item.getRepoPath(), sha1ToItemMap)
-            } else {
-                sha1ToItemMap.put(repositories.getFileInfo(item.getRepoPath()).getChecksumsInfo().getSha1(), item)
+private updateItemsExtraData(GetDependencyDataResult dependencyDataResult, Map<String, ItemInfo> sha1ToItemMap){
+    for (ResourceInfo resource : dependencyDataResult.getResources()) {
+        ItemInfo item = sha1ToItemMap.get(resource.getSha1())
+        if (item != null) {
+            RepoPath repoPath = item.getRepoPath()
+            if (!BLANK.equals(resource.getDescription())) {
+                repositories.setProperty(repoPath, DESCRIPTION, resource.getDescription())
+            }
+            if (!BLANK.equals(resource.getHomepageUrl())) {
+                repositories.setProperty(repoPath, HOME_PAGE_URL, resource.getHomepageUrl())
+            }
+
+            Collection<VulnerabilityInfo> vulns = resource.getVulnerabilities()
+            for (VulnerabilityInfo vulnerabilityInfo : vulns) {
+                String vulnName = vulnerabilityInfo.getName()
+                repositories.setProperty(repoPath, VULNERABILITY + vulnName, "${CVE_URL}${vulnName}")
+                repositories.setProperty(repoPath, VULNERABILITY_SEVERITY + vulnName, "${vulnerabilityInfo.getSeverity()}")
+            }
+            Collection<String> licenses = resource.getLicenses()
+            String dataLicenses = BLANK
+            for (String license : licenses) {
+                dataLicenses += license + ", "
+            }
+            if (dataLicenses.size() > 0) {
+                dataLicenses = dataLicenses.substring(0, dataLicenses.size() - 2)
+                repositories.setProperty(repoPath, LICENSES, dataLicenses)
             }
         }
-        return
     }
+}
 
-    private void setItemsPoliciesAndExtraData(Map<String, ItemInfo> sha1ToItemMap, def config, String repoName) {
-        Collection<AgentProjectInfo> projects = new ArrayList<AgentProjectInfo>()
-        AgentProjectInfo projectInfo = new AgentProjectInfo()
-        projects.add(projectInfo)
-        projectInfo.setCoordinates(new Coordinates(null, PROJECT_NAME, BLANK))
-        // Set details
-        List<DependencyInfo> dependencies = new ArrayList<DependencyInfo>()
-        for (String key : sha1ToItemMap.keySet()) {
-            DependencyInfo dependencyInfo = new DependencyInfo(key)
-            dependencyInfo.setArtifactId(sha1ToItemMap.get(key).getName());
-            dependencies.add(dependencyInfo)
-        }
-        projectInfo.setDependencies(dependencies)
-        String url = BLANK.equals(config.wssUrl) ? DEFAULT_SERVICE_URL : config.wssUrl
-        WhitesourceService whitesourceService = new WhitesourceService(AGENT_TYPE , AGENT_VERSION, url)
-        GetDependencyDataResult dependencyDataResult = whitesourceService.getDependencyData(config.apiKey, repoName, BLANK, projects);
-        log.info("Updating additional dependency data")
-        updateItemsExtraData(dependencyDataResult, sha1ToItemMap)
-        log.info("Finished updating additional dependency data")
-        if (config.checkPolicies) {
-            CheckPolicyComplianceResult checkPoliciesResult = whitesourceService.checkPolicyCompliance(
-                    config.apiKey, repoName, BLANK, projects, false);
-            log.info("Updating policies for repo")
-            checkPolicies(checkPoliciesResult.getNewProjects(), sha1ToItemMap)
-            checkPolicies(checkPoliciesResult.getExistingProjects(), sha1ToItemMap)
-            log.info("Finished updating policies for repo")
+private void findAllRepoItems(def repoPath, Map<String, ItemInfo> sha1ToItemMap) {
+    for (ItemInfo item : repositories.getChildren(repoPath)) {
+        if (item.isFolder()) {
+            findAllRepoItems(item.getRepoPath(), sha1ToItemMap)
+        } else {
+            sha1ToItemMap.put(repositories.getFileInfo(item.getRepoPath()).getChecksumsInfo().getSha1(), item)
         }
     }
+    return
+}
+
+private void setItemsPoliciesAndExtraData(Map<String, ItemInfo> sha1ToItemMap, def config, String repoName) {
+    Collection<AgentProjectInfo> projects = new ArrayList<AgentProjectInfo>()
+    AgentProjectInfo projectInfo = new AgentProjectInfo()
+    projects.add(projectInfo)
+    projectInfo.setCoordinates(new Coordinates(null, PROJECT_NAME, BLANK))
+    // Set details
+    List<DependencyInfo> dependencies = new ArrayList<DependencyInfo>()
+    for (String key : sha1ToItemMap.keySet()) {
+        DependencyInfo dependencyInfo = new DependencyInfo(key)
+        dependencyInfo.setArtifactId(sha1ToItemMap.get(key).getName());
+        dependencies.add(dependencyInfo)
+    }
+    projectInfo.setDependencies(dependencies)
+    String url = BLANK.equals(config.wssUrl) ? DEFAULT_SERVICE_URL : config.wssUrl
+    boolean setProxy = false
+    final String proxyHost = config.proxyHost
+    if (proxyHost != null) {
+        setProxy = true
+    }
+    WhitesourceService whitesourceService = new WhitesourceService(AGENT_TYPE , AGENT_VERSION, url, setProxy, DEFAULT_CONNECTION_TIMEOUT_MINUTES)
+    checkAndSetProxySettings(whitesourceService, config, proxyHost)
+    GetDependencyDataResult dependencyDataResult = whitesourceService.getDependencyData(config.apiKey, repoName, BLANK, projects);
+    log.info("Updating additional dependency data")
+    updateItemsExtraData(dependencyDataResult, sha1ToItemMap)
+    log.info("Finished updating additional dependency data")
+    if (config.checkPolicies) {
+        CheckPolicyComplianceResult checkPoliciesResult = whitesourceService.checkPolicyCompliance(
+                config.apiKey, repoName, BLANK, projects, false);
+        log.info("Updating policies for repo")
+        checkPolicies(checkPoliciesResult.getNewProjects(), sha1ToItemMap)
+        checkPolicies(checkPoliciesResult.getExistingProjects(), sha1ToItemMap)
+        log.info("Finished updating policies for repo")
+    }
+}
+
+private String checkAndSetProxySettings(WhitesourceService whitesourceService, def config, String proxyHost) {
+    if (proxyHost != null) {
+        final int proxyPort = Integer.parseInt(config.proxyPort)
+        final String proxyUser = config.proxyUser == null ? '' : config.proxyUser
+        final String proxyPass = config.proxyPass == null ? '' : config.proxyPass
+        whitesourceService.getClient().setProxy(proxyHost, proxyPort, proxyUser, proxyPass)
+    }
+}
