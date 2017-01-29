@@ -56,6 +56,10 @@ import javax.ws.rs.core.*
 @Field final String PROJECT_NAME = 'ArtifactoryDependencies'
 @Field final String BLANK = ''
 @Field final String DEFAULT_SERVICE_URL = 'https://saas.whitesourcesoftware.com/agent'
+@Field final String BOWER = 'bower'
+@Field final String FORWARD_SLASH = '/'
+@Field final String UNDERSCORE = '_'
+@Field final String REJECT = 'Reject'
 @Field final int DEFAULT_CONNECTION_TIMEOUT_MINUTES = 60
 
 /**
@@ -84,7 +88,7 @@ jobs {
      * "0 42 9 * * ?"  - Build a trigger that will fire daily at 9:42 am
      * "0 0/2 8-17 * * ?" - Build a trigger that will fire every other minute, between 8am and 5pm, every day
      */
-    updateRepoWithWhiteSource(cron: "0 10 18 * * ?") {
+    updateRepoWithWhiteSource(cron: "0 50 16 * * ?") {
         log.info("Starting job updateRepoData With WhiteSource")
         def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
         String[] repositories = config.repoKeys as String[]
@@ -197,12 +201,11 @@ private void setItemsPoliciesAndExtraData(Map<String, ItemInfo> sha1ToItemMap, d
     projectInfo.setDependencies(dependencies)
     String url = BLANK.equals(config.wssUrl) ? DEFAULT_SERVICE_URL : config.wssUrl
     boolean setProxy = false
-    final String proxyHost = config.proxyHost
-    if (proxyHost != null) {
+    if (config.useProxy) {
         setProxy = true
     }
     WhitesourceService whitesourceService = new WhitesourceService(AGENT_TYPE , AGENT_VERSION, url, setProxy, DEFAULT_CONNECTION_TIMEOUT_MINUTES)
-    checkAndSetProxySettings(whitesourceService, config, proxyHost)
+    checkAndSetProxySettings(whitesourceService, config)
     GetDependencyDataResult dependencyDataResult = whitesourceService.getDependencyData(config.apiKey, repoName, BLANK, projects);
     log.info("Updating additional dependency data")
     updateItemsExtraData(dependencyDataResult, sha1ToItemMap)
@@ -217,11 +220,17 @@ private void setItemsPoliciesAndExtraData(Map<String, ItemInfo> sha1ToItemMap, d
     }
 }
 
-private String checkAndSetProxySettings(WhitesourceService whitesourceService, def config, String proxyHost) {
-    if (proxyHost != null) {
-        final int proxyPort = Integer.parseInt(config.proxyPort)
-        final String proxyUser = config.proxyUser == null ? '' : config.proxyUser
-        final String proxyPass = config.proxyPass == null ? '' : config.proxyPass
+private String checkAndSetProxySettings(WhitesourceService whitesourceService, def config) {
+    if (config.useProxy) {
+        log.info("Setting proxy settings")
+        def proxyPort = config.proxyPort
+        final String proxyHost = config.proxyHost
+        final String proxyUser = null
+        final String proxyPass = null
+        if (config.proxyUser.size == 0 && config.proxyPass.size == 0) {
+            proxyUser = config.proxyUser
+            proxyPass = config.proxyPass
+        }
         whitesourceService.getClient().setProxy(proxyHost, proxyPort, proxyUser, proxyPass)
     }
 }
