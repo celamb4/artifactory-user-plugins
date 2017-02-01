@@ -88,23 +88,27 @@ jobs {
      * "0 42 9 * * ?"  - Build a trigger that will fire daily at 9:42 am
      * "0 0/2 8-17 * * ?" - Build a trigger that will fire every other minute, between 8am and 5pm, every day
      */
-    updateRepoWithWhiteSource(cron: "0 50 16 * * ?") {
-        log.info("Starting job updateRepoData With WhiteSource")
-        def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
-        String[] repositories = config.repoKeys as String[]
-        for (String repository : repositories) {
-            Map<String, ItemInfo> sha1ToItemMap = new HashMap<String, ItemInfo>()
-            findAllRepoItems(RepoPathFactory.create(repository), sha1ToItemMap)
-            int repoSize = sha1ToItemMap.size()
-            if (repoSize > MAX_REPO_SIZE) {
-                log.warn("The max repository size for check policies in WhiteSource is : ${repoPath} items, Job Exiting")
-            } else if (repoSize == 0) {
-                log.warn("This repository is empty or not exit : ${repository} , Job Exiting")
-            } else {
-                setItemsPoliciesAndExtraData(sha1ToItemMap, config, repository)
+    updateRepoWithWhiteSource(cron: "0 46 8 * * ?") {
+        try {
+            log.info("Starting job updateRepoData With WhiteSource")
+            def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
+            String[] repositories = config.repoKeys as String[]
+            for (String repository : repositories) {
+                Map<String, ItemInfo> sha1ToItemMap = new HashMap<String, ItemInfo>()
+                findAllRepoItems(RepoPathFactory.create(repository), sha1ToItemMap)
+                int repoSize = sha1ToItemMap.size()
+                if (repoSize > MAX_REPO_SIZE) {
+                    log.warn("The max repository size for check policies in WhiteSource is : ${repoPath} items, Job Exiting")
+                } else if (repoSize == 0) {
+                    log.warn("This repository is empty or not exit : ${repository} , Job Exiting")
+                } else {
+                    setItemsPoliciesAndExtraData(sha1ToItemMap, config, repository)
+                }
             }
+        } catch (Exception e) {
+            log.warn("Error while running the plugin: {}", e.getMessage())
         }
-        log.info("Job updateRepoWithWhiteSource Finished")
+        log.info("Job updateRepoWithWhiteSource has Finished")
     }
 }
 
@@ -117,13 +121,17 @@ storage {
      * item (org.artifactory.fs.ItemInfo) - the original item being created.
      */
     afterCreate { item ->
-        if (!item.isFolder()) {
-            def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
-            Map<String, ItemInfo> sha1ToItemMap = new HashMap<String, ItemInfo>()
-            sha1ToItemMap.put(repositories.getFileInfo(item.getRepoPath()).getChecksumsInfo().getSha1(), item)
-            setItemsPoliciesAndExtraData(sha1ToItemMap, config, item.getRepoKey())
-            log.info("New Item - {$item} was added to the repository")
+        try {
+            if (!item.isFolder()) {
+                def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
+                Map<String, ItemInfo> sha1ToItemMap = new HashMap<String, ItemInfo>()
+                sha1ToItemMap.put(repositories.getFileInfo(item.getRepoPath()).getChecksumsInfo().getSha1(), item)
+                setItemsPoliciesAndExtraData(sha1ToItemMap, config, item.getRepoKey())
+            }
+        } catch (Exception e) {
+            log.warn("Error while running the plugin: {}", e.getMessage())
         }
+        log.info("New Item - {$item} was added to the repository")
     }
 }
 
@@ -195,7 +203,7 @@ private void setItemsPoliciesAndExtraData(Map<String, ItemInfo> sha1ToItemMap, d
     List<DependencyInfo> dependencies = new ArrayList<DependencyInfo>()
     for (String key : sha1ToItemMap.keySet()) {
         DependencyInfo dependencyInfo = new DependencyInfo(key)
-        dependencyInfo.setArtifactId(sha1ToItemMap.get(key).getName());
+        dependencyInfo.setArtifactId(sha1ToItemMap.get(key).getName())
         dependencies.add(dependencyInfo)
     }
     projectInfo.setDependencies(dependencies)
@@ -204,23 +212,26 @@ private void setItemsPoliciesAndExtraData(Map<String, ItemInfo> sha1ToItemMap, d
     if (config.useProxy) {
         setProxy = true
     }
-    WhitesourceService whitesourceService = new WhitesourceService(AGENT_TYPE , AGENT_VERSION, url, setProxy, DEFAULT_CONNECTION_TIMEOUT_MINUTES)
-    checkAndSetProxySettings(whitesourceService, config)
-    GetDependencyDataResult dependencyDataResult = whitesourceService.getDependencyData(config.apiKey, repoName, BLANK, projects);
-    log.info("Updating additional dependency data")
-    updateItemsExtraData(dependencyDataResult, sha1ToItemMap)
-    log.info("Finished updating additional dependency data")
-    if (config.checkPolicies) {
-        CheckPolicyComplianceResult checkPoliciesResult = whitesourceService.checkPolicyCompliance(
-                config.apiKey, repoName, BLANK, projects, false);
-        log.info("Updating policies for repo")
-        checkPolicies(checkPoliciesResult.getNewProjects(), sha1ToItemMap)
-        checkPolicies(checkPoliciesResult.getExistingProjects(), sha1ToItemMap)
-        log.info("Finished updating policies for repo")
+    try {
+        WhitesourceService whitesourceService = new WhitesourceService(AGENT_TYPE, AGENT_VERSION, url, setProxy, DEFAULT_CONNECTION_TIMEOUT_MINUTES)
+        checkAndSetProxySettings(whitesourceService, config)
+        GetDependencyDataResult dependencyDataResult = whitesourceService.getDependencyData(config.apiKey, repoName, BLANK, projects);
+        log.info("Updating additional dependency data")
+        updateItemsExtraData(dependencyDataResult, sha1ToItemMap)
+        log.info("Finished updating additional dependency data")
+        if (config.checkPolicies) {
+            CheckPolicyComplianceResult checkPoliciesResult = whitesourceService.checkPolicyCompliance(config.apiKey, repoName, BLANK, projects, false)
+            log.info("Updating policies for repo")
+            checkPolicies(checkPoliciesResult.getNewProjects(), sha1ToItemMap)
+            checkPolicies(checkPoliciesResult.getExistingProjects(), sha1ToItemMap)
+            log.info("Finished updating policies for repo")
+        }
+    } catch (Exception e) {
+        log.warn("Error while running the plugin: {}", e.getMessage())
     }
 }
 
-private String checkAndSetProxySettings(WhitesourceService whitesourceService, def config) {
+private void checkAndSetProxySettings(WhitesourceService whitesourceService, def config) {
     if (config.useProxy) {
         log.info("Setting proxy settings")
         def proxyPort = config.proxyPort
