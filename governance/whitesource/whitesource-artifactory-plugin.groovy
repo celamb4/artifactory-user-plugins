@@ -25,15 +25,17 @@ import org.artifactory.request.*
 import org.artifactory.util.*
 import org.artifactory.resource.*
 
-import org.whitesource.agent.api.model.AgentProjectInfo;
-import org.whitesource.agent.client.WhitesourceService;
-import org.whitesource.agent.api.model.DependencyInfo;
-import org.whitesource.agent.api.model.Coordinates;
-import org.whitesource.agent.api.dispatch.CheckPolicyComplianceResult;
-import org.whitesource.agent.api.dispatch.GetDependencyDataResult;
-import org.whitesource.agent.api.model.ResourceInfo;
-import org.whitesource.agent.api.model.VulnerabilityInfo;
-import org.whitesource.agent.api.model.PolicyCheckResourceNode;
+import org.whitesource.agent.api.model.AgentProjectInfo
+import org.whitesource.agent.client.WhitesourceService
+import org.whitesource.agent.api.model.DependencyInfo
+import org.whitesource.agent.api.model.Coordinates
+import org.whitesource.agent.api.dispatch.CheckPolicyComplianceResult
+import org.whitesource.agent.api.dispatch.GetDependencyDataResult
+import org.whitesource.agent.api.model.ResourceInfo
+import org.whitesource.agent.api.model.VulnerabilityInfo
+import org.whitesource.agent.api.model.PolicyCheckResourceNode
+import org.whitesource.agent.api.dispatch.UpdateInventoryRequest;
+import org.whitesource.agent.api.dispatch.UpdateInventoryResult
 
 import javax.ws.rs.core.*
 
@@ -52,14 +54,16 @@ import javax.ws.rs.core.*
 @Field final String AGENT_VERSION = '2.2.7'
 @Field final String OR = '|'
 @Field final int MAX_REPO_SIZE = 10000
+@Field final int MAX_REPO_SIZE_TO_UPLOAD = 2000
 
-@Field final String PROJECT_NAME = 'ArtifactoryDependencies'
+//    @Field final String PROJECT_NAME = 'ArtifactoryDependencies'
 @Field final String BLANK = ''
 @Field final String DEFAULT_SERVICE_URL = 'https://saas.whitesourcesoftware.com/agent'
 @Field final String BOWER = 'bower'
 @Field final String FORWARD_SLASH = '/'
 @Field final String UNDERSCORE = '_'
 @Field final String REJECT = 'Reject'
+@Field final String ACCEPT = 'Accept'
 @Field final int DEFAULT_CONNECTION_TIMEOUT_MINUTES = 60
 
 /**
@@ -88,9 +92,9 @@ jobs {
      * "0 42 9 * * ?"  - Build a trigger that will fire daily at 9:42 am
      * "0 0/2 8-17 * * ?" - Build a trigger that will fire every other minute, between 8am and 5pm, every day
      */
-    updateRepoWithWhiteSource(cron: "0 46 8 * * ?") {
+    updateRepoWithWhiteSource(cron: "0 27 17 * * ?") {
         try {
-            log.info("Starting job updateRepoData With WhiteSource")
+            log.info("Starting job updateRepoData By WhiteSource")
             def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
             String[] repositories = config.repoKeys as String[]
             for (String repository : repositories) {
@@ -102,7 +106,19 @@ jobs {
                 } else if (repoSize == 0) {
                     log.warn("This repository is empty or not exit : ${repository} , Job Exiting")
                 } else {
-                    setItemsPoliciesAndExtraData(sha1ToItemMap, config, repository)
+                    // create project and WhiteSource service
+                    Collection<AgentProjectInfo> projects = createProjects(sha1ToItemMap, repository)
+                    WhitesourceService whitesourceService = createWhiteSourceService(config)
+                    // update WhiteSource with repositories with no more than 2000 artifacts
+                    log.info("Sending Update to WhiteSource for repository : ${repository}")
+                    if (repoSize > MAX_REPO_SIZE_TO_UPLOAD) {
+                        log.warn("Max repository size inorder to update WhiteSource is : ${repoPath}")
+                    } else {
+                        UpdateInventoryResult updateResult = whitesourceService.update(config.apiKey, config.productName, BLANK, projects)
+                        logResult(updateResult)
+                    }
+                    // check policies and add additional data for each artifact
+                    setArtifactsPoliciesAndExtraData(projects, config, repository, whitesourceService, sha1ToItemMap)
                 }
             }
         } catch (Exception e) {
@@ -126,10 +142,12 @@ storage {
                 def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
                 Map<String, ItemInfo> sha1ToItemMap = new HashMap<String, ItemInfo>()
                 sha1ToItemMap.put(repositories.getFileInfo(item.getRepoPath()).getChecksumsInfo().getSha1(), item)
-                setItemsPoliciesAndExtraData(sha1ToItemMap, config, item.getRepoKey())
+                Collection<AgentProjectInfo> projects = createProjects(sha1ToItemMap, item.getRepoKey())
+                WhitesourceService whitesourceService = createWhiteSourceService(config)
+                setArtifactsPoliciesAndExtraData(projects, config, item.getRepoKey(), whitesourceService, sha1ToItemMap)
             }
         } catch (Exception e) {
-            log.warn("Error while running the plugin: {}", e.getMessage())
+            log.warn("Error while running the plugin: {$e.getMessage()}")
         }
         log.info("New Item - {$item} was added to the repository")
     }
@@ -139,14 +157,16 @@ storage {
 
 private void checkPolicies(Map<String, PolicyCheckResourceNode> projects, Map<String, ItemInfo> sha1ToItemMap){
     for (String key : projects.keySet()) {
-        PolicyCheckResourceNode policyCheckResourceNode = projects.get(key);
-        Collection<PolicyCheckResourceNode> children = policyCheckResourceNode.getChildren();
+        PolicyCheckResourceNode policyCheckResourceNode = projects.get(key)
+        Collection<PolicyCheckResourceNode> children = policyCheckResourceNode.getChildren()
         for (PolicyCheckResourceNode child : children) {
             ItemInfo item = sha1ToItemMap.get(child.getResource().getSha1())
-            if (item != null && child.getPolicy() != null){
+            if (item != null && child.getPolicy() != null) {
                 def path = item.getRepoPath()
-                repositories.setProperty(path, ACTION, child.getPolicy().getActionType())
-                repositories.setProperty(path, POLICY_DETAILS, child.getPolicy().getDisplayName())
+                if (REJECT.equals(child.getPolicy().getActionType()) || ACCEPT.equals(child.getPolicy().getActionType())) {
+                    repositories.setProperty(path, ACTION, child.getPolicy().getActionType())
+                    repositories.setProperty(path, POLICY_DETAILS, child.getPolicy().getDisplayName())
+                }
             }
         }
     }
@@ -194,12 +214,35 @@ private void findAllRepoItems(def repoPath, Map<String, ItemInfo> sha1ToItemMap)
     return
 }
 
-private void setItemsPoliciesAndExtraData(Map<String, ItemInfo> sha1ToItemMap, def config, String repoName) {
+
+private void setArtifactsPoliciesAndExtraData(Collection<AgentProjectInfo> projects, def config, String repoName,
+                                              WhitesourceService whitesourceService,  Map<String, ItemInfo> sha1ToItemMap) {
+    // get policies and dependency data result and update properties tab for each artifact
+    try {
+        int repoSize = sha1ToItemMap.size()
+        log.info("Finished updating WhiteSource with ${repoSize} artifacts")
+        GetDependencyDataResult dependencyDataResult = whitesourceService.getDependencyData(config.apiKey, config.productName, BLANK, projects)
+        log.info("Updating additional dependency data")
+        updateItemsExtraData(dependencyDataResult, sha1ToItemMap)
+        log.info("Finished updating additional dependency data")
+        if (config.checkPolicies) {
+            CheckPolicyComplianceResult checkPoliciesResult = whitesourceService.checkPolicyCompliance(config.apiKey, config.productName, BLANK, projects, false)
+            log.info("Updating policies for repository: ${repoName}")
+            checkPolicies(checkPoliciesResult.getNewProjects(), sha1ToItemMap)
+            checkPolicies(checkPoliciesResult.getExistingProjects(), sha1ToItemMap)
+            log.info("Finished updating policies for repository : ${repoName}")
+        }
+    } catch (Exception e) {
+        log.warn("Error while running the plugin: ${e.getMessage()}")
+    }
+}
+
+private Collection<AgentProjectInfo> createProjects(Map<String, ItemInfo> sha1ToItemMap, String repoName) {
     Collection<AgentProjectInfo> projects = new ArrayList<AgentProjectInfo>()
     AgentProjectInfo projectInfo = new AgentProjectInfo()
     projects.add(projectInfo)
-    projectInfo.setCoordinates(new Coordinates(null, PROJECT_NAME, BLANK))
-    // Set details
+    projectInfo.setCoordinates(new Coordinates(null, repoName, BLANK))
+    // Create Dependencies
     List<DependencyInfo> dependencies = new ArrayList<DependencyInfo>()
     for (String key : sha1ToItemMap.keySet()) {
         DependencyInfo dependencyInfo = new DependencyInfo(key)
@@ -207,28 +250,25 @@ private void setItemsPoliciesAndExtraData(Map<String, ItemInfo> sha1ToItemMap, d
         dependencies.add(dependencyInfo)
     }
     projectInfo.setDependencies(dependencies)
+    return projects
+}
+
+private WhitesourceService createWhiteSourceService(def config) {
     String url = BLANK.equals(config.wssUrl) ? DEFAULT_SERVICE_URL : config.wssUrl
     boolean setProxy = false
     if (config.useProxy) {
         setProxy = true
     }
+    WhitesourceService whitesourceService = null
     try {
-        WhitesourceService whitesourceService = new WhitesourceService(AGENT_TYPE, AGENT_VERSION, url, setProxy, DEFAULT_CONNECTION_TIMEOUT_MINUTES)
+        // create whiteSource service and check proxy settings
+        whitesourceService = new WhitesourceService(AGENT_TYPE, AGENT_VERSION, url, setProxy, DEFAULT_CONNECTION_TIMEOUT_MINUTES)
         checkAndSetProxySettings(whitesourceService, config)
-        GetDependencyDataResult dependencyDataResult = whitesourceService.getDependencyData(config.apiKey, repoName, BLANK, projects);
-        log.info("Updating additional dependency data")
-        updateItemsExtraData(dependencyDataResult, sha1ToItemMap)
-        log.info("Finished updating additional dependency data")
-        if (config.checkPolicies) {
-            CheckPolicyComplianceResult checkPoliciesResult = whitesourceService.checkPolicyCompliance(config.apiKey, repoName, BLANK, projects, false)
-            log.info("Updating policies for repo")
-            checkPolicies(checkPoliciesResult.getNewProjects(), sha1ToItemMap)
-            checkPolicies(checkPoliciesResult.getExistingProjects(), sha1ToItemMap)
-            log.info("Finished updating policies for repo")
-        }
+
     } catch (Exception e) {
-        log.warn("Error while running the plugin: {}", e.getMessage())
+        log.warn("Error creating WhiteSource Service: {$e.getMessage()}")
     }
+    return whitesourceService
 }
 
 private void checkAndSetProxySettings(WhitesourceService whitesourceService, def config) {
@@ -238,10 +278,36 @@ private void checkAndSetProxySettings(WhitesourceService whitesourceService, def
         final String proxyHost = config.proxyHost
         final String proxyUser = null
         final String proxyPass = null
-        if (config.proxyUser.size == 0 && config.proxyPass.size == 0) {
+        if (!BLANK.equals(config.proxyUser) && !BLANK.equals(config.proxyPass)) {
             proxyUser = config.proxyUser
             proxyPass = config.proxyPass
         }
         whitesourceService.getClient().setProxy(proxyHost, proxyPort, proxyUser, proxyPass)
     }
+}
+
+private void logResult(UpdateInventoryResult updateResult) {
+    StringBuilder resultLogMsg = new StringBuilder("Inventory update results for ").append(updateResult.getOrganization()).append("\n")
+
+    // newly created projects
+    Collection<String> createdProjects = updateResult.getCreatedProjects()
+    if (createdProjects.isEmpty()) {
+        resultLogMsg.append("No new projects found.").append("\n")
+    } else {
+        resultLogMsg.append("Newly created projects:").append("\n")
+        for (String projectName : createdProjects) {
+            resultLogMsg.append(projectName).append("\n")
+        }
+    }
+    // updated projects
+    Collection<String> updatedProjects = updateResult.getUpdatedProjects()
+    if (updatedProjects.isEmpty()) {
+        resultLogMsg.append("No projects were updated.").append("\n")
+    } else {
+        resultLogMsg.append("Updated projects:").append("\n")
+        for (String projectName : updatedProjects) {
+            resultLogMsg.append(projectName).append("\n")
+        }
+    }
+    log.info(resultLogMsg.toString())
 }

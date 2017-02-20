@@ -53,3 +53,5 @@ Properties File:
 3. repoKeys - The list of the repositories names to scan.
 4. wssUrl - URL to send the request, defaults to 
    "https://www.whitesourcesoftware.com/agent".
+5. productName - Represents Artifactory instance. Your Artifactory instance
+   name in/for WhiteSource app. 
