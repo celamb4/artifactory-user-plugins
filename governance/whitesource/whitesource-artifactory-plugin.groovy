@@ -28,7 +28,6 @@
     import org.jfrog.artifactory.client.*
     import org.whitesource.agent.archive.ArchiveExtractor
     import org.whitesource.scm.ScmConnector
-
     import java.io.InputStream.*
 
     import org.whitesource.agent.api.model.AgentProjectInfo
@@ -67,6 +66,9 @@
     @Field final int MAX_REPO_SIZE = 10000
     @Field final int MAX_REPO_SIZE_TO_UPLOAD = 2000
     @Field final String ALLOWED_ARCHIVE_FILE_EXTENSIONS = 'archiveInclude'
+    @Field final String CHECK_POLOCIES =  'checkPolicies'
+    @Field final String FORCE_CHECK_ALL_DEPENDENCIES =  'forceCheckAllDependencies'
+
 
 //    @Field final String PROJECT_NAME = 'ArtifactoryDependencies'
     @Field final String BLANK = ''
@@ -84,7 +86,7 @@
     @Field final int ARCHIVE_EXTRACTION_DEPTH = 2
     @Field final boolean PARTIAL_SHA1_MATCH = false
 
-    @Field final String PREFIX ='**/*.'
+    @Field final String PREFIX = '**/*.'
 
 //    @Field final List<String> SOURCE_EXTENSIONS = Arrays.asList("c", "cc", "cp", "cpp", "cxx", "c\\+\\+", "c#", "cs", "csharp",
 //            "h", "hh", "hpp", "hxx", "h\\+\\+", "go", "goc", "java", "js", "m", "mm", "pch", "php", "py", "rb", "swift")
@@ -121,27 +123,23 @@
          * "0 42 9 * * ?"  - Build a trigger that will fire daily at 9:42 am
          * "0 0/2 8-17 * * ?" - Build a trigger that will fire every other minute, between 8am and 5pm, every day
          */
-       updateRepoWithWhiteSource(cron: "*/20 * * * * ?") {
+       updateRepoWithWhiteSource(cron: "0 01 17 * * ?") {
                try {
                    log.info("Starting job updateRepoData By WhiteSource")
                    def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
+                   CheckPolicyComplianceResult checkPoliciesResult
                    String[] repositories = config.repoKeys as String[]
-
                    Set<String> archiveIncludes = getAllowedFileExtensions(config.archiveIncludes as String[], false)
                    Set<String> archiveIncludesWithPrefix = getAllowedFileExtensions(config.archiveIncludes as String[], true)
-                   // String[] includesWithPrefix = addPrefix(config.getProperty("archiveIncludes") as String[])
-
                    String[] includesRepositoryContent = config.getProperty(INCLUDES_REPOSITORY_CONTENT) as String[]
                    if (includesRepositoryContent.size() == 0){
                        includesRepositoryContent = buildDefaults()
                    }
                    includesRepositoryContent = addPrefix(includesRepositoryContent)
-
                    for (String repository : repositories) {
                        Map<String, ItemInfo> sha1ToItemMap = new HashMap<String, ItemInfo>()
                        List<ItemInfo> list = new ArrayList<>()
                        findAllRepoItems(RepoPathFactory.create(repository), sha1ToItemMap, list, archiveIncludes)
-
                        def compressedFilesFolder = compressOneRepositoryArchiveIntoOneZip(list, repository)
                        int repoSize = sha1ToItemMap.size()
                        if (repoSize > MAX_REPO_SIZE) {
@@ -158,18 +156,20 @@
                                log.warn("Max repository size inorder to update WhiteSource is : ${repoPath}")
                            } else {
                                //updating the WSS service with scanning results
-                               UpdateInventoryResult updateResult = whitesourceService.update(config.apiKey, config.productName, BLANK, projects)
-                               logResult(updateResult)
+                               if (config.checkPolicies) {
+                                   checkPoliciesResult = checkPolicies(whitesourceService, config.apiKey, config.productName, BLANK, projects, config.forceCheckAllDependencies ,config.forceUpdate)
+                               }
+                               if (!checkPoliciesResult.hasRejections() || config.forceUpdate) {
+                                   UpdateInventoryResult updateResult = whitesourceService.update(config.apiKey, config.productName, BLANK, projects);
+                                   logResult(updateResult)
+                               }
                            }
-                           // check policies and add additional data for each artifact - within Artifactory
-                           setArtifactsPoliciesAndExtraData(projects, config, repository, whitesourceService, sha1ToItemMap)
+                           populateArtifactoryPropertiesTab(projects, config, repository, whitesourceService, sha1ToItemMap, checkPoliciesResult)
+                           deleteTemporaryFolders(compressedFilesFolder)
                        }
                    }
                } catch (Exception e) {
                    log.warn("Error while running the plugin: {}", e.getMessage())
-               } finally {
-//                log.info("Deleting temp zip file")
-//                compressedFilesFolder.delete();
                }
                log.info("Job updateRepoWithWhiteSource has Finished")
            }
@@ -192,7 +192,7 @@
                     sha1ToItemMap.put(repositories.getFileInfo(item.getRepoPath()).getChecksumsInfo().getSha1(), item)
                     Collection<AgentProjectInfo> projects = createProjects(sha1ToItemMap, item.getRepoKey() , null)
                     WhitesourceService whitesourceService = createWhiteSourceService(config)
-                    setArtifactsPoliciesAndExtraData(projects, config, item.getRepoKey(), whitesourceService, sha1ToItemMap)
+                    populateArtifactoryPropertiesTab(projects, config, item.getRepoKey(), whitesourceService, sha1ToItemMap)
                 }
             } catch (Exception e) {
                 //log.warn("Error while running the plugin: {$e.getMessage()}")
@@ -202,6 +202,34 @@
     }
 
     /* --- Private Methods --- */
+
+    private void deleteTemporaryFolders(List<File> compressedFilesFolder) {
+        File fileExtractorTempFolder = new File(TEMP_DOWNLOAD_DIRECTORY + File.separator + "WhiteSource-ArchiveExtractor")
+        if (fileExtractorTempFolder.exists()) {
+            //the temp folder used by the WSS file agent is present.
+            boolean success = deleteNonEmptyDirectory(fileExtractorTempFolder)
+        }
+        for (int i = 0; i < compressedFilesFolder.size(); i++) {
+            File toRemove = compressedFilesFolder.get(i)
+            boolean success = deleteNonEmptyDirectory(toRemove)
+        }
+    }
+
+
+
+
+    private boolean deleteNonEmptyDirectory(File dir) {
+        if (dir.isDirectory()) {
+            File[] children = dir.listFiles()
+            for (int i = 0; i < children.length; i++) {
+                boolean success = deleteNonEmptyDirectory(children[i])
+                if (!success) {
+                    return false
+                }
+            }
+        }
+        return dir.delete()
+    }
 
 
 
@@ -217,7 +245,6 @@
             //nothing found in config file. use the defaults
             String tempPrefix = PREFIX
             if (!withPrefix) {
-
                 tempPrefix = ""
             }
                 allowedFileExtensions.add(tempPrefix + "jar")
@@ -241,7 +268,7 @@
 
 
 
-    private void checkPolicies(Map<String, PolicyCheckResourceNode> projects, Map<String, ItemInfo> sha1ToItemMap){
+    private void handleCheckPoliciesResults(Map<String, PolicyCheckResourceNode> projects, Map<String, ItemInfo> sha1ToItemMap){
         for (String key : projects.keySet()) {
             PolicyCheckResourceNode policyCheckResourceNode = projects.get(key)
             Collection<PolicyCheckResourceNode> children = policyCheckResourceNode.getChildren()
@@ -289,7 +316,6 @@
         }
     }
 
-  //  buildRelevantRepoItemsList
 
     private void findAllRepoItems(
             def repoPath, Map<String, ItemInfo> sha1ToItemMap, List<ItemInfo> list, Set<String> allowedFileExtensions = null) {
@@ -300,11 +326,10 @@
         }
         for (ItemInfo item : repositories.getChildren(repoPath)) {
             if (item.isFolder()) {
-                findAllRepoItems(item.getRepoPath(), sha1ToItemMap, list)
+                findAllRepoItems(item.getRepoPath(), sha1ToItemMap, list, allowedFileExtensions)
             } else {
                  String endsWith = item.getName()
                 int index = endsWith.lastIndexOf(".")
-                //if ( index > -1) {
                 sha1ToItemMap.put(repositories.getFileInfo(item.getRepoPath()).getChecksumsInfo().getSha1(), item)
                 if ( item.getName().lastIndexOf(".") > -1) {
                     endsWith = endsWith.substring(index + 1)
@@ -314,17 +339,14 @@
                         log.info("The following item will not be checked, as its extension is not defined in config file: " + item.getName())
                     }
                 }
-
-
-
             }
         }
         return
     }
 
 
-    private void setArtifactsPoliciesAndExtraData(Collection<AgentProjectInfo> projects, def config, String repoName,
-                                                  WhitesourceService whitesourceService,  Map<String, ItemInfo> sha1ToItemMap) {
+    private void populateArtifactoryPropertiesTab(Collection<AgentProjectInfo> projects, def config, String repoName,
+                                                  WhitesourceService whitesourceService, Map<String, ItemInfo> sha1ToItemMap, CheckPolicyComplianceResult checkPoliciesResult) {
         // get policies and dependency data result and update properties tab for each artifact
         try {
             int repoSize = sha1ToItemMap.size()
@@ -334,10 +356,9 @@
             updateItemsExtraData(dependencyDataResult, sha1ToItemMap)
             log.info("Finished updating additional dependency data")
             if (config.checkPolicies) {
-                CheckPolicyComplianceResult checkPoliciesResult = whitesourceService.checkPolicyCompliance(config.apiKey, config.productName, BLANK, projects, false)
                 log.info("Updating policies for repository: ${repoName}")
-                checkPolicies(checkPoliciesResult.getNewProjects(), sha1ToItemMap)
-                checkPolicies(checkPoliciesResult.getExistingProjects(), sha1ToItemMap)
+                handleCheckPoliciesResults(checkPoliciesResult.getNewProjects(), sha1ToItemMap)
+                handleCheckPoliciesResults(checkPoliciesResult.getExistingProjects(), sha1ToItemMap)
                 log.info("Finished updating policies for repository : ${repoName}")
             }
         } catch (Exception e) {
@@ -350,37 +371,49 @@
         AgentProjectInfo projectInfo = new AgentProjectInfo()
         projects.add(projectInfo)
         projectInfo.setCoordinates(new Coordinates(null, repoName, BLANK))
-        // Create Dependencies
         List<DependencyInfo> dependencies = new ArrayList<DependencyInfo>()
         for (String key : sha1ToItemMap.keySet()) {
             DependencyInfo dependencyInfo = new DependencyInfo(key)
             String archiveName = sha1ToItemMap.get(key).getName()
             dependencyInfo.setArtifactId(archiveName)
+            dependencies.add(dependencyInfo)
             String compressedFilesFolderName = null
-
-            //ugly as hell. refactor later!!
             File oneFile
             for (int i = 0; i < compressedFilesFolder.size(); i++) {
                 oneFile = compressedFilesFolder.get(i)
                 if (oneFile.getPath().toString().endsWith(archiveName)) {
                     compressedFilesFolderName = oneFile.getPath()
-                    String currentArchiveFileNameWithPrefix = "**/*" + sha1ToItemMap.get(key).getName()
+                    String currentArchiveFileNameWithPrefix = GLOB_PATTERN_PREFIX + sha1ToItemMap.get(key).getName()
                     String [] exclude = [currentArchiveFileNameWithPrefix]
                     List<DependencyInfo> dependencyInfos = new FileSystemScanner(false).createDependencyInfos(
                             Arrays.asList(compressedFilesFolderName), null, includesRepositoryContent , exclude, CASE_SENSITIVE_GLOB,
                             ARCHIVE_EXTRACTION_DEPTH, allowedFileExtensions.toArray(new String[allowedFileExtensions.size()]), new String[0], FOLLOW_SYMLINKS, new ArrayList<String>(), PARTIAL_SHA1_MATCH)
                     dependencyInfo.getChildren().addAll(dependencyInfos)
-                    dependencies.add(dependencyInfo)
-                    projectInfo.setDependencies(dependencies)
                     break
                 }
-              //  (List<String> scannerBaseDirs, ScmConnector scmConnector, String[] includes, String[] excludes, boolean globCaseSensitive, int archiveExtractionDepth, String[] archiveIncludes, String[] archiveExcludes, boolean followSymlinks, Collection<String> excludedCopyrights, boolean partialSha1Match) {
-
-
-                }
+            }
         }
+        projectInfo.setDependencies(dependencies)
         return projects
     }
+
+    private CheckPolicyComplianceResult checkPolicies(WhitesourceService service, String orgToken, String product, String productVersion,
+                                  Collection<AgentProjectInfo> projects, boolean forceCheckAllDependencies, boolean  forceUpdate ) {
+        log.info("Checking policies")
+        CheckPolicyComplianceResult checkPoliciesResult = service.checkPolicyCompliance(orgToken, product, productVersion, projects, forceCheckAllDependencies)
+        boolean hasRejections = checkPoliciesResult.hasRejections()
+        if (hasRejections && !forceUpdate) {
+            log.info("Some dependencies did not conform with open source policies, review report for details")
+            log.info("=== UPDATE ABORTED ===")
+        } else {
+            String message = hasRejections ? "Some dependencies violate open source policies, however all were force " +
+                    "updated to organization inventory." :
+                    "All dependencies conform with open source policies."
+            log.info(message)
+        }
+        return checkPoliciesResult
+    }
+
 
     private WhitesourceService createWhiteSourceService(def config) {
         String url = BLANK.equals(config.wssUrl) ? DEFAULT_SERVICE_URL : config.wssUrl
@@ -393,7 +426,6 @@
             // create whiteSource service and check proxy settings
             whitesourceService = new WhitesourceService(AGENT_TYPE, AGENT_VERSION, url, setProxy, DEFAULT_CONNECTION_TIMEOUT_MINUTES)
             checkAndSetProxySettings(whitesourceService, config)
-
         } catch (Exception e) {
             log.warn("Error creating WhiteSource Service: {$e.getMessage()}")
         }
@@ -441,8 +473,6 @@
     }
 
 
-
-
     private List<File> compressOneRepositoryArchiveIntoOneZip(List list, String repository) throws IOException {
         byte[] data = new byte[2048]
         List<File> listOfArchiveFiles = new ArrayList<>()
@@ -478,21 +508,13 @@
     }
 
 
-
-
-
-
     private File compressAllRepositoryArchiveIntoOneZip(List list, String repository) throws IOException {
         byte[] data = new byte[2048]
         File destDir = new File(TEMP_DOWNLOAD_DIRECTORY + File.separator +repository + '_'  + System.nanoTime())
         if (!destDir.exists()) {
             destDir.mkdirs()
         }
-      //  File archive = new File (destDir.getPath() + File.separator + repository + '_' + System.nanoTime() +  ".zip" )
         File archive = null
-
-//        File archive = new File(TEMP_DOWNLOAD_DIRECTORY + File.separator + repository +
-//                File.separator + repository + '_' + System.nanoTime() + ".zip")
         FileOutputStream fos
         ZipOutputStream zos
         try {
@@ -516,15 +538,7 @@
                 }
 
                 archive.getPath()
-//                List<DependencyInfo> dependencyInfos = new FileSystemScanner(false).createDependencyInfos(
-//                        Arrays.asList(compressedFilesFolderName), null, includes , null, CASE_SENSITIVE_GLOB,
-//                        ARCHIVE_EXTRACTION_DEPTH, allowedFileExtensions.toArray(new String[allowedFileExtensions.size()]), new String[0], FOLLOW_SYMLINKS, new ArrayList<String>(), PARTIAL_SHA1_MATCH)
-//            projectInfo.getDependencies().addAll()
-
-
                 dependencyInfos.size()
-
-
             }
         } finally {
             zos.close()
@@ -544,7 +558,7 @@
         allExtensions.addAll(BINARY_EXTENSIONS)
         String[] globPatterns = new String[allExtensions.size()]
         for (int i = 0; i < allExtensions.size(); i++) {
-            globPatterns[i] = '**/*' + allExtensions.get(i)
+            globPatterns[i] = GLOB_PATTERN_PREFIX + allExtensions.get(i)
         }
         return allExtensions
     }
@@ -646,4 +660,13 @@
             updated[i] = PREFIX + values[i]
         }
         return updated
+    }
+
+    private boolean getBooleanProperty(String propertyKey, boolean defaultValue) {
+        boolean property = defaultValue
+        String propertyValue = config.getProperty(propertyKey)
+        if (StringUtils.isNotBlank(propertyValue)) {
+            property = Boolean.valueOf(propertyValue)
+        }
+        return property
     }
