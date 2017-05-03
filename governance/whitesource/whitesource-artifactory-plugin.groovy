@@ -190,7 +190,10 @@
                     def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
                     Map<String, ItemInfo> sha1ToItemMap = new HashMap<String, ItemInfo>()
                     sha1ToItemMap.put(repositories.getFileInfo(item.getRepoPath()).getChecksumsInfo().getSha1(), item)
-                    Collection<AgentProjectInfo> projects = createProjects(sha1ToItemMap, item.getRepoKey() , null)
+                    List<File> fileList = new ArrayList<>()
+                    String[] includesRepositoryContent = []
+                    Set<String> allowedFileExtensions = new HashSet<String>()
+                    Collection<AgentProjectInfo> projects = createProjects(sha1ToItemMap, item.getRepoKey() , fileList, includesRepositoryContent, allowedFileExtensions)
                     WhitesourceService whitesourceService = createWhiteSourceService(config)
                     populateArtifactoryPropertiesTab(projects, config, item.getRepoKey(), whitesourceService, sha1ToItemMap)
                 }
