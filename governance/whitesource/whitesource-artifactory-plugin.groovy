@@ -16,37 +16,24 @@
 
 
     import groovy.transform.Field
+    import org.artifactory.build.*
     import org.artifactory.common.*
+    import org.artifactory.exception.*
     import org.artifactory.fs.*
     import org.artifactory.repo.*
-    import org.artifactory.build.*
-    import org.artifactory.exception.*
     import org.artifactory.request.*
-    import org.artifactory.util.*
     import org.artifactory.resource.*
-    import org.jfrog.artifactory.*
-    import org.jfrog.artifactory.client.*
-    import org.whitesource.agent.archive.ArchiveExtractor
-    import org.whitesource.scm.ScmConnector
-    import java.io.InputStream.*
-
-    import org.whitesource.agent.api.model.AgentProjectInfo
-    import org.whitesource.agent.client.WhitesourceService
-    import org.whitesource.agent.api.model.DependencyInfo
-    import org.whitesource.agent.api.model.Coordinates
+    import org.artifactory.util.*
+    import org.whitesource.agent.FileSystemScanner
     import org.whitesource.agent.api.dispatch.CheckPolicyComplianceResult
     import org.whitesource.agent.api.dispatch.GetDependencyDataResult
-    import org.whitesource.agent.api.model.ResourceInfo
-    import org.whitesource.agent.api.model.VulnerabilityInfo
-    import org.whitesource.agent.api.model.PolicyCheckResourceNode
     import org.whitesource.agent.api.dispatch.UpdateInventoryResult
-    import org.whitesource.agent.FileSystemScanner
+    import org.whitesource.agent.api.model.*
+    import org.whitesource.agent.client.WhitesourceService
 
     import javax.ws.rs.core.*
     import java.util.zip.ZipEntry
     import java.util.zip.ZipOutputStream
-    import java.util.*
-
 
     @Field final String ACTION = 'WSS-Action'
     @Field final String POLICY_DETAILS = 'WSS-Policy-Details'
@@ -55,7 +42,7 @@
     @Field final String LICENSES = 'WSS-Licenses'
     @Field final String VULNERABILITY = 'WSS-Vulnerability: '
     @Field final String VULNERABILITY_SEVERITY = 'WSS-Vulnerability-Severity: '
-    @Field final String TEMP_DOWNLOAD_DIRECTORY = System.getProperty('java.io.tmpdir') //+ File.separator +'tmp-downloadDir'
+    @Field final String TEMP_DOWNLOAD_DIRECTORY = System.getProperty('java.io.tmpdir')
     @Field final String CVE_URL = 'https://cve.mitre.org/cgi-bin/cvename.cgi?name='
     @Field final String INCLUDES_REPOSITORY_CONTENT = 'includesRepositoryContent'
 
@@ -65,17 +52,9 @@
     @Field final String OR = '|'
     @Field final int MAX_REPO_SIZE = 10000
     @Field final int MAX_REPO_SIZE_TO_UPLOAD = 2000
-    @Field final String ALLOWED_ARCHIVE_FILE_EXTENSIONS = 'archiveInclude'
-    @Field final String CHECK_POLOCIES =  'checkPolicies'
-    @Field final String FORCE_CHECK_ALL_DEPENDENCIES =  'forceCheckAllDependencies'
 
-
-//    @Field final String PROJECT_NAME = 'ArtifactoryDependencies'
     @Field final String BLANK = ''
     @Field final String DEFAULT_SERVICE_URL = 'https://saas.whitesourcesoftware.com/agent'
-    @Field final String BOWER = 'bower'
-    @Field final String FORWARD_SLASH = '/'
-    @Field final String UNDERSCORE = '_'
     @Field final String REJECT = 'Reject'
     @Field final String ACCEPT = 'Accept'
     @Field final int DEFAULT_CONNECTION_TIMEOUT_MINUTES = 60
@@ -86,16 +65,8 @@
     @Field final int ARCHIVE_EXTRACTION_DEPTH = 2
     @Field final boolean PARTIAL_SHA1_MATCH = false
 
-    @Field final String PREFIX = '**/*.'
-
-//    @Field final List<String> SOURCE_EXTENSIONS = Arrays.asList("c", "cc", "cp", "cpp", "cxx", "c\\+\\+", "c#", "cs", "csharp",
-//            "h", "hh", "hpp", "hxx", "h\\+\\+", "go", "goc", "java", "js", "m", "mm", "pch", "php", "py", "rb", "swift")
-
-//    @Field final List<String> BINARY_EXTENSIONS = Arrays.asList("jar", "aar", "egg", "tar.gz", "tar.bz2", "gzip", "tgz",
-//            "zip", "whl", "gem", "deb", "udeb", "rpm", "arpm", "drpm", "whl", "msi", "exe", "swf", "swc", "air", "dll")
-
     @Field final String GLOB_PATTERN_PREFIX = '**/*'
-
+    @Field final String PREFIX = '**/*.'
 
     /**
      * This is a plug-in that integrates Artifactory with WhiteSource
@@ -123,7 +94,7 @@
          * "0 42 9 * * ?"  - Build a trigger that will fire daily at 9:42 am
          * "0 0/2 8-17 * * ?" - Build a trigger that will fire every other minute, between 8am and 5pm, every day
          */
-       updateRepoWithWhiteSource(cron: "0 01 17 * * ?") {
+       updateRepoWithWhiteSource(cron: "0 11 09 * * ?") {
                try {
                    log.info("Starting job updateRepoData By WhiteSource")
                    def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
@@ -175,8 +146,6 @@
            }
        }
 
-
-
     storage {
         /**
          * Handle after create events.
@@ -195,10 +164,12 @@
                     Set<String> allowedFileExtensions = new HashSet<String>()
                     Collection<AgentProjectInfo> projects = createProjects(sha1ToItemMap, item.getRepoKey() , fileList, includesRepositoryContent, allowedFileExtensions)
                     WhitesourceService whitesourceService = createWhiteSourceService(config)
-                    populateArtifactoryPropertiesTab(projects, config, item.getRepoKey(), whitesourceService, sha1ToItemMap)
+                    CheckPolicyComplianceResult checkPoliciesResult = checkPolicies(whitesourceService, config.apiKey,
+                            item.getRepoKey(), BLANK, projects, false ,false)
+                    populateArtifactoryPropertiesTab(projects, config, item.getRepoKey(), whitesourceService, sha1ToItemMap, checkPoliciesResult)
                 }
             } catch (Exception e) {
-                //log.warn("Error while running the plugin: {$e.getMessage()}")
+                log.warn("Error while running the plugin: {$e.getMessage()}")
             }
             log.info("New Item - {$item} was added to the repository")
         }
@@ -218,9 +189,6 @@
         }
     }
 
-
-
-
     private boolean deleteNonEmptyDirectory(File dir) {
         if (dir.isDirectory()) {
             File[] children = dir.listFiles()
@@ -234,9 +202,7 @@
         return dir.delete()
     }
 
-
-
-    private Set<String> getAllowedFileExtensions(String [] allowedFileExtensionsFromConfigFile, boolean withPrefix){
+    private Set<String> getAllowedFileExtensions(String [] allowedFileExtensionsFromConfigFile, boolean withPrefix) {
         Set<String> allowedFileExtensions = new HashSet<String>()
         for (String key: allowedFileExtensionsFromConfigFile) {
             if (withPrefix) {
@@ -244,7 +210,7 @@
             }
             allowedFileExtensions.add(key)
         }
-        if(allowedFileExtensions.size() == 0){
+        if (allowedFileExtensions.size() == 0) {
             //nothing found in config file. use the defaults
             String tempPrefix = PREFIX
             if (!withPrefix) {
@@ -263,13 +229,11 @@
                 allowedFileExtensions.add(tempPrefix + "tar")
                 allowedFileExtensions.add(tempPrefix + "tgz")
                 allowedFileExtensions.add(tempPrefix + "tar.bz2")
-                allowedFileExtensions.add(tempPrefix + "rpm");
-                allowedFileExtensions.add(tempPrefix + "rar");
+                allowedFileExtensions.add(tempPrefix + "rpm")
+                allowedFileExtensions.add(tempPrefix + "rar")
             }
         return allowedFileExtensions
     }
-
-
 
     private void handleCheckPoliciesResults(Map<String, PolicyCheckResourceNode> projects, Map<String, ItemInfo> sha1ToItemMap){
         for (String key : projects.keySet()) {
@@ -319,10 +283,8 @@
         }
     }
 
-
     private void findAllRepoItems(
             def repoPath, Map<String, ItemInfo> sha1ToItemMap, List<ItemInfo> list, Set<String> allowedFileExtensions = null) {
-
         if (allowedFileExtensions == null || allowedFileExtensions.size() == 0 ) {
             log.error("No file extensions list was provided.")
             return
@@ -346,7 +308,6 @@
         }
         return
     }
-
 
     private void populateArtifactoryPropertiesTab(Collection<AgentProjectInfo> projects, def config, String repoName,
                                                   WhitesourceService whitesourceService, Map<String, ItemInfo> sha1ToItemMap, CheckPolicyComplianceResult checkPoliciesResult) {
@@ -417,7 +378,6 @@
         return checkPoliciesResult
     }
 
-
     private WhitesourceService createWhiteSourceService(def config) {
         String url = BLANK.equals(config.wssUrl) ? DEFAULT_SERVICE_URL : config.wssUrl
         boolean setProxy = false
@@ -475,7 +435,6 @@
         log.info(resultLogMsg.toString())
     }
 
-
     private List<File> compressOneRepositoryArchiveIntoOneZip(List list, String repository) throws IOException {
         byte[] data = new byte[2048]
         List<File> listOfArchiveFiles = new ArrayList<>()
@@ -509,64 +468,6 @@
         }
         return listOfArchiveFiles
     }
-
-
-    private File compressAllRepositoryArchiveIntoOneZip(List list, String repository) throws IOException {
-        byte[] data = new byte[2048]
-        File destDir = new File(TEMP_DOWNLOAD_DIRECTORY + File.separator +repository + '_'  + System.nanoTime())
-        if (!destDir.exists()) {
-            destDir.mkdirs()
-        }
-        File archive = null
-        FileOutputStream fos
-        ZipOutputStream zos
-        try {
-
-            list.each { item ->
-                archive = new File (destDir.getPath() + File.separator + repository + '_' + System.nanoTime() + "_" + item.getPath() )
-                fos = new FileOutputStream(archive)
-                zos = new ZipOutputStream(fos)
-                ZipEntry ze = new ZipEntry(item.getPath())
-                zos.putNextEntry(ze)
-                InputStream is
-                try {
-                    is = repositories.getContent(item).getInputStream()
-                    int len
-                    while ((len = is.read(data)) > 0) {
-                        zos.write(data, 0, len)
-                    }
-                } finally {
-                    is.close()
-                    zos.closeEntry()
-                }
-
-                archive.getPath()
-                dependencyInfos.size()
-            }
-        } finally {
-            zos.close()
-            fos.close()
-        }
-        return archive
-    }
-
-    //TODO - make the list of the supported extension real and not fake
-    private List<String> initializeGlobPattern() {
-        List<String> allExtensions = new ArrayList<>()
-        List<String> SOURCE_EXTENSIONS = Arrays.asList("c", "cc", "cp", "cpp", "cxx", "c\\+\\+", "c#", "cs", "csharp",
-                "h", "hh", "hpp", "hxx", "h\\+\\+", "go", "goc", "java", "js", "m", "mm", "pch", "php", "py", "rb", "swift")
-        List<String> BINARY_EXTENSIONS = Arrays.asList("jar", "aar", "egg", "tar.gz", "tar.bz2", "gzip", "tgz",
-                "zip", "whl", "gem", "deb", "udeb", "rpm", "arpm", "drpm", "whl", "msi", "exe", "swf", "swc", "air", "dll")
-        allExtensions.addAll(SOURCE_EXTENSIONS)
-        allExtensions.addAll(BINARY_EXTENSIONS)
-        String[] globPatterns = new String[allExtensions.size()]
-        for (int i = 0; i < allExtensions.size(); i++) {
-            globPatterns[i] = GLOB_PATTERN_PREFIX + allExtensions.get(i)
-        }
-        return allExtensions
-    }
-
-
 
     private String [] buildDefaults(){
         String [] defaultArray = [
@@ -656,20 +557,10 @@
         return defaultArray
     }
 
-
     private String[] addPrefix(String[] values){
         String[] updated = new String [values.size()]
         for (int i=0; i<values.size(); i++){
             updated[i] = PREFIX + values[i]
         }
         return updated
-    }
-
-    private boolean getBooleanProperty(String propertyKey, boolean defaultValue) {
-        boolean property = defaultValue
-        String propertyValue = config.getProperty(propertyKey)
-        if (StringUtils.isNotBlank(propertyValue)) {
-            property = Boolean.valueOf(propertyValue)
-        }
-        return property
     }
