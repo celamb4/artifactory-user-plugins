@@ -142,7 +142,7 @@ jobs {
                 }
             }
         } catch (Exception e) {
-            log.warn("Error while running the plugin: {}", e.getMessage())
+            log.warn("Error while running the plugin: ", e)
         }
         log.info("Job updateRepoWithWhiteSource has Finished")
     }
@@ -164,15 +164,16 @@ storage {
                 List<File> fileList = new ArrayList<>()
                 String[] includesRepositoryContent = []
                 Set<String> allowedFileExtensions = new HashSet<String>()
-                Collection<AgentProjectInfo> projects = createProjects(sha1ToItemMap, item.getRepoKey() , fileList, includesRepositoryContent, allowedFileExtensions)
+                def repoKey = item.getRepoKey()
+                Collection<AgentProjectInfo> projects = createProjects(sha1ToItemMap, repoKey, fileList, includesRepositoryContent, allowedFileExtensions)
                 WhitesourceService whitesourceService = createWhiteSourceService(config)
-                CheckPolicyComplianceResult checkPoliciesResult = checkPolicies(whitesourceService, config.apiKey,
-                        item.getRepoKey(), BLANK, projects, false ,false)
-                populateArtifactoryPropertiesTab(projects, config, item.getRepoKey(), whitesourceService, sha1ToItemMap, checkPoliciesResult)
+                CheckPolicyComplianceResult checkPoliciesResult = checkPolicies(whitesourceService, config.apiKey, repoKey, BLANK, projects, false ,false)
+                populateArtifactoryPropertiesTab(projects, config, repoKey, whitesourceService, sha1ToItemMap, checkPoliciesResult)
             }
         } catch (Exception e) {
-            log.warn("Error while running the plugin: {$e.getMessage()}")
+            log.warn("Error creating WhiteSource Service " + e)
         }
+
         log.info("New Item - {$item} was added to the repository")
     }
 }
@@ -328,7 +329,7 @@ private void populateArtifactoryPropertiesTab(Collection<AgentProjectInfo> proje
             log.info("Finished updating policies for repository : ${repoName}")
         }
     } catch (Exception e) {
-        log.warn("Error while running the plugin: ${e.getMessage()}")
+        log.warn("Error Updating property tab " + e)
     }
 }
 
@@ -394,7 +395,7 @@ private WhitesourceService createWhiteSourceService(def config) {
         }
         return service
     } catch (Exception e) {
-        log.warn("Error creating WhiteSource Service: {$e.getMessage()}")
+        log.warn("Error creating WhiteSource Service " + e.getLocalizedMessage())
         return null
     }
 }
