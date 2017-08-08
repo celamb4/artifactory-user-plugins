@@ -132,7 +132,7 @@ jobs {
                         if (config.checkPolicies) {
                             checkPoliciesResult = checkPolicies(service, config.apiKey, config.productName, BLANK, projects, config.forceCheckAllDependencies ,config.forceUpdate)
                         }
-                        if ((checkPoliciesResult.hasRejections() != null || !checkPoliciesResult.hasRejections()) || config.forceUpdate) {
+                        if (config.updateWss && ((checkPoliciesResult.hasRejections() != null || !checkPoliciesResult.hasRejections()) || config.forceUpdate)) {
                             UpdateInventoryResult updateResult = service.update(config.apiKey, config.productName, BLANK, projects);
                             logResult(updateResult)
                         }
