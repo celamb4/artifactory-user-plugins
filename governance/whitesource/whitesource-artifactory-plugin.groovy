@@ -96,7 +96,7 @@ jobs {
      * "0 42 9 * * ?"  - Build a trigger that will fire daily at 9:42 am
      * "0 0/2 8-17 * * ?" - Build a trigger that will fire every other minute, between 8am and 5pm, every day
      */
-    updateRepoWithWhiteSource(cron: "0 07 18 * * ?") {
+    updateRepoWithWhiteSource(cron: "0 08 17 * * ?") {
         try {
             log.info("Starting job updateRepoData By WhiteSource")
             def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
@@ -110,6 +110,7 @@ jobs {
             }
             includesRepositoryContent = addPrefix(includesRepositoryContent)
             for (String repository : repositories) {
+                String productName = config.containsKey('productName') ? config.productName : repository
                 Map<String, ItemInfo> sha1ToItemMap = new HashMap<String, ItemInfo>()
                 List<ItemInfo> list = new ArrayList<>()
                 findAllRepoItems(RepoPathFactory.create(repository), sha1ToItemMap, list, archiveIncludes)
@@ -130,14 +131,14 @@ jobs {
                     } else {
                         //updating the WSS service with scanning results
                         if (config.checkPolicies) {
-                            checkPoliciesResult = checkPolicies(service, config.apiKey, config.productName, BLANK, projects, config.forceCheckAllDependencies ,config.forceUpdate)
+                            checkPoliciesResult = checkPolicies(service, config.apiKey, productName, BLANK, projects, config.forceCheckAllDependencies ,config.forceUpdate)
                         }
                         if (config.updateWss && ((checkPoliciesResult.hasRejections() != null || !checkPoliciesResult.hasRejections()) || config.forceUpdate)) {
-                            UpdateInventoryResult updateResult = service.update(config.apiKey, config.productName, BLANK, projects);
+                            UpdateInventoryResult updateResult = service.update(config.apiKey, productName, BLANK, projects);
                             logResult(updateResult)
                         }
                     }
-                    populateArtifactoryPropertiesTab(projects, config, repository, service, sha1ToItemMap, checkPoliciesResult)
+                    populateArtifactoryPropertiesTab(projects, config, repository, service, sha1ToItemMap, checkPoliciesResult, productName)
                     deleteTemporaryFolders(compressedFilesFolder)
                 }
             }
@@ -168,7 +169,8 @@ storage {
                 Collection<AgentProjectInfo> projects = createProjects(sha1ToItemMap, repoKey, fileList, includesRepositoryContent, allowedFileExtensions)
                 WhitesourceService whitesourceService = createWhiteSourceService(config)
                 CheckPolicyComplianceResult checkPoliciesResult = checkPolicies(whitesourceService, config.apiKey, repoKey, BLANK, projects, false ,false)
-                populateArtifactoryPropertiesTab(projects, config, repoKey, whitesourceService, sha1ToItemMap, checkPoliciesResult)
+                String productName = config.productName != null ? config.productName : repository
+                populateArtifactoryPropertiesTab(projects, config, repoKey, whitesourceService, sha1ToItemMap, checkPoliciesResult, productName)
             }
         } catch (Exception e) {
             log.warn("Error creating WhiteSource Service " + e)
@@ -313,12 +315,13 @@ private void findAllRepoItems(
 }
 
 private void populateArtifactoryPropertiesTab(Collection<AgentProjectInfo> projects, def config, String repoName,
-                                              WhitesourceService whitesourceService, Map<String, ItemInfo> sha1ToItemMap, CheckPolicyComplianceResult checkPoliciesResult) {
+                                              WhitesourceService whitesourceService, Map<String, ItemInfo> sha1ToItemMap,
+                                              CheckPolicyComplianceResult checkPoliciesResult, String productName) {
     // get policies and dependency data result and update properties tab for each artifact
     try {
         int repoSize = sha1ToItemMap.size()
         log.info("Finished updating WhiteSource with ${repoSize} artifacts")
-        GetDependencyDataResult dependencyDataResult = whitesourceService.getDependencyData(config.apiKey, config.productName, BLANK, projects)
+        GetDependencyDataResult dependencyDataResult = whitesourceService.getDependencyData(config.apiKey, productName, BLANK, projects)
         log.info("Updating additional dependency data")
         updateItemsExtraData(dependencyDataResult, sha1ToItemMap)
         log.info("Finished updating additional dependency data")
@@ -370,7 +373,7 @@ private CheckPolicyComplianceResult checkPolicies(WhitesourceService service, St
     CheckPolicyComplianceResult checkPoliciesResult = service.checkPolicyCompliance(orgToken, product, productVersion, projects, forceCheckAllDependencies)
     boolean hasRejections = checkPoliciesResult.hasRejections()
     if (hasRejections && !forceUpdate) {
-        log.info("Some dependencies did not conform with open source policies, review report for details")
+        log.info("Some dependencies did not conform with open source policies")
         log.info("=== UPDATE ABORTED ===")
     } else {
         String message = hasRejections ? "Some dependencies violate open source policies, however all were force " +
