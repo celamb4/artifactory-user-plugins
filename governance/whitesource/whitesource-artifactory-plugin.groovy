@@ -20,19 +20,27 @@ import org.artifactory.build.*
 import org.artifactory.common.*
 import org.artifactory.exception.*
 import org.artifactory.fs.*
+import org.artifactory.fs.ItemInfo
 import org.artifactory.repo.*
+import org.artifactory.repo.RepoPath
+import org.artifactory.repo.RepoPathFactory
 import org.artifactory.request.*
 import org.artifactory.resource.*
 import org.artifactory.util.*
 import org.whitesource.agent.FileSystemScanner
-import org.whitesource.agent.api.dispatch.GetDependencyDataResult
-import org.whitesource.agent.api.model.*
-import org.whitesource.agent.client.WhitesourceService
 import org.whitesource.agent.api.dispatch.CheckPolicyComplianceResult
+import org.whitesource.agent.api.dispatch.GetDependencyDataResult
 import org.whitesource.agent.api.dispatch.UpdateInventoryResult
+import org.whitesource.agent.api.model.*
 import org.whitesource.agent.api.model.AgentProjectInfo
+import org.whitesource.agent.api.model.PolicyCheckResourceNode
+import org.whitesource.agent.api.model.ResourceInfo
+import org.whitesource.agent.api.model.VulnerabilityInfo
+import org.whitesource.agent.client.WhitesourceService
 
 import javax.ws.rs.core.*
+import javax.ws.rs.core.*
+import java.security.MessageDigest
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -43,14 +51,15 @@ import java.util.zip.ZipOutputStream
 @Field final String LICENSES = 'WSS-Licenses'
 @Field final String VULNERABILITY = 'WSS-Vulnerability: '
 @Field final String VULNERABILITY_SEVERITY = 'WSS-Vulnerability-Severity: '
+@Field final String VULNERABILITY_SCORE = 'WSS-Vulnerability-Score: '
 @Field final String TEMP_DOWNLOAD_DIRECTORY = System.getProperty('java.io.tmpdir')
 @Field final String CVE_URL = 'https://cve.mitre.org/cgi-bin/cvename.cgi?name='
 @Field final String INCLUDES_REPOSITORY_CONTENT = 'includesRepositoryContent'
 
 @Field final String PROPERTIES_FILE_PATH = 'plugins/whitesource-artifactory-plugin.properties'
 @Field final String AGENT_TYPE = 'artifactory-plugin'
-@Field final String PLUGIN_VERSION = '1.0.4'
-@Field final String AGENT_VERSION = '2.2.7'
+@Field final String PLUGIN_VERSION = '1.0.8'
+@Field final String AGENT_VERSION = '2.3.9'
 @Field final String OR = '|'
 @Field final int MAX_REPO_SIZE = 10000
 @Field final int MAX_REPO_SIZE_TO_UPLOAD = 2000
@@ -69,6 +78,10 @@ import java.util.zip.ZipOutputStream
 
 @Field final String GLOB_PATTERN_PREFIX = '**/*'
 @Field final String PREFIX = '**/*.'
+@Field final String BACK_SLASH = '/'
+
+@Field final String REMOTE = 'remote'
+@Field final String VIRTUAL = 'virtual'
 
 /**
  * This is a plug-in that integrates Artifactory with WhiteSource
@@ -87,6 +100,31 @@ import java.util.zip.ZipOutputStream
  * 4. WSS-Vulnerabilities
  */
 
+download {
+
+    beforeDownloadRequest { request, repoPath ->
+        def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
+        def rpath = repoPath.path
+        def rkey = repoPath.repoKey
+        //request.httpRequest.request.coyoteRequest.serverNameMB.strValue
+        // get the url of the remote repo
+        def repositoryConf = repositories.getRepositoryConfiguration(rkey)
+        def type = repositoryConf.type
+        String sha1 = null
+        if (REMOTE.equals(type)) {
+            // get remote repo artifact sha1
+            sha1 = getRemoteRepoFileSha1(repositoryConf, rpath)
+            createProjectAndCheckPolicyForDownload(rpath, sha1, rkey, config)
+        } else if (VIRTUAL.equals(type)) {
+            // get virtual repo artifact sha1
+            log.info("Virtual repo is currently not supported")
+        } else {
+            // get local repo artifact sha1
+            log.info("Local repo is currently not supported")
+        }
+    }
+}
+
 jobs {
     /**
      * How to set cron execution:
@@ -96,7 +134,7 @@ jobs {
      * "0 42 9 * * ?"  - Build a trigger that will fire daily at 9:42 am
      * "0 0/2 8-17 * * ?" - Build a trigger that will fire every other minute, between 8am and 5pm, every day
      */
-    updateRepoWithWhiteSource(cron: "0 08 17 * * ?") {
+    updateRepoWithWhiteSource(cron: "0 10 10 * * ?") {
         try {
             log.info("Starting job updateRepoData By WhiteSource")
             def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
@@ -148,8 +186,8 @@ jobs {
         log.info("Job updateRepoWithWhiteSource has Finished")
     }
 }
-
 storage {
+
     /**
      * Handle after create events.
      *
@@ -168,7 +206,7 @@ storage {
                 def repoKey = item.getRepoKey()
                 Collection<AgentProjectInfo> projects = createProjects(sha1ToItemMap, repoKey, fileList, includesRepositoryContent, allowedFileExtensions)
                 WhitesourceService whitesourceService = createWhiteSourceService(config)
-                CheckPolicyComplianceResult checkPoliciesResult = checkPolicies(whitesourceService, config.apiKey, repoKey, BLANK, projects, false ,false)
+                CheckPolicyComplianceResult checkPoliciesResult = checkPolicies(whitesourceService, config.apiKey, repoKey, BLANK, projects, false, false)
                 String productName = config.productName != null ? config.productName : repository
                 populateArtifactoryPropertiesTab(projects, config, repoKey, whitesourceService, sha1ToItemMap, checkPoliciesResult, productName)
             }
@@ -179,6 +217,7 @@ storage {
         log.info("New Item - {$item} was added to the repository")
     }
 }
+
 
 /* --- Private Methods --- */
 
@@ -274,6 +313,9 @@ private updateItemsExtraData(GetDependencyDataResult dependencyDataResult, Map<S
                 String vulnName = vulnerabilityInfo.getName()
                 repositories.setProperty(repoPath, VULNERABILITY + vulnName, "${CVE_URL}${vulnName}")
                 repositories.setProperty(repoPath, VULNERABILITY_SEVERITY + vulnName, "${vulnerabilityInfo.getSeverity()}")
+                if (vulnerabilityInfo.getScore() != null && vulnerabilityInfo.getScore() > 0) {
+                    repositories.setProperty(repoPath, VULNERABILITY_SCORE + vulnName, "${vulnerabilityInfo.getScore()}")
+                }
             }
             Collection<String> licenses = resource.getLicenses()
             String dataLicenses = BLANK
@@ -357,12 +399,13 @@ private Collection<AgentProjectInfo> createProjects(Map<String, ItemInfo> sha1To
                 String [] exclude = [currentArchiveFileNameWithPrefix]
                 List<DependencyInfo> dependencyInfos = new FileSystemScanner(false, null).createDependencies(
                         Arrays.asList(compressedFilesFolderName), null, includesRepositoryContent , exclude, CASE_SENSITIVE_GLOB,
-                        ARCHIVE_EXTRACTION_DEPTH, allowedFileExtensions.toArray(new String[allowedFileExtensions.size()]), new String[0], FOLLOW_SYMLINKS, new ArrayList<String>(), PARTIAL_SHA1_MATCH)
+                        ARCHIVE_EXTRACTION_DEPTH, allowedFileExtensions.toArray(new String[allowedFileExtensions.size()]), new String[0], false, FOLLOW_SYMLINKS, new ArrayList<String>(), PARTIAL_SHA1_MATCH)
                 dependencyInfo.getChildren().addAll(dependencyInfos)
                 break
             }
         }
     }
+
     projectInfo.setDependencies(dependencies)
     return projects
 }
@@ -571,4 +614,99 @@ private String[] addPrefix(String[] values){
         updated[i] = PREFIX + values[i]
     }
     return updated
+}
+
+private void createProjectAndCheckPolicyForDownload(def rpath, def sha1, def rkey, def config) {
+    def artifactName = rpath.substring(rpath.lastIndexOf(BACK_SLASH) + 1)
+    String productName = config.productName != null ? config.productName : rkey
+    Collection<AgentProjectInfo> projects = createProjectWithOneDependency(sha1, artifactName, rkey)
+    WhitesourceService whitesourceService = createWhiteSourceService(config)
+    CheckPolicyComplianceResult checkPoliciesResult = checkPolicies(whitesourceService, config.apiKey, rkey, BLANK, projects, false ,false)
+    def name = ''
+    if (checkPoliciesResult.hasRejections() == true) {
+        def project = checkPoliciesResult.getNewProjects()
+        for (String key : project.keySet()) {
+            PolicyCheckResourceNode policyCheckResourceNode = project.get(key)
+            Collection<PolicyCheckResourceNode> children = policyCheckResourceNode.getChildren()
+            for (PolicyCheckResourceNode child : children) {
+                name = child.getPolicy().getDisplayName()
+            }
+        }
+        def status = 403
+        def message = "${artifactName} did not conform with open source policies :  ${name}"
+        log.warn message
+        throw new CancelException(message, status) {
+            public Throwable fillInStackTrace() {
+                return null
+            }
+
+        }
+    } else {
+        def message = "All th epolicies comform with  :  ${artifactName}"
+        log.info message
+    }
+}
+
+private Collection<AgentProjectInfo> createProjectWithOneDependency(String sha1, String fileName, String repoName) {
+    Collection<AgentProjectInfo> projects = new ArrayList<AgentProjectInfo>()
+    AgentProjectInfo projectInfo = new AgentProjectInfo()
+    projects.add(projectInfo)
+    projectInfo.setCoordinates(new Coordinates(null, repoName, BLANK))
+    List<DependencyInfo> dependencies = new ArrayList<DependencyInfo>()
+    DependencyInfo dependencyInfo = new DependencyInfo(sha1)
+    dependencyInfo.setArtifactId(fileName)
+    dependencies.add(dependencyInfo)
+    projectInfo.setDependencies(dependencies)
+    return projects
+}
+
+private String getRemoteRepoFileSha1(def conf, def rpath){
+    def url =conf.url
+    if (!url.endsWith('/')) url += '/'
+    url += rpath
+    // get the remote authorization data
+    def auth = "$conf.username:$conf.password".bytes.encodeBase64()
+    def conn = null, istream = null, realchecksum = null
+    try {
+        // open a connection to the remote
+        conn = new URL(url).openConnection()
+        conn.setRequestMethod('HEAD')
+        conn.setRequestProperty('Authorization', "Basic $auth")
+        // don't modify the path if this file already exists on the far end
+    } finally {
+        // close everything
+        istream?.close()
+        conn?.disconnect()
+    }
+    // operation, attempt to pull the checksum from the far end
+    // get the url of the remote repo
+    url = conf.url
+    if (!url.endsWith('/')) url += '/'
+    url += rpath
+    // get the remote authorization data
+    conn = null
+    istream = null
+    try {
+        // open a connection to the remote
+        conn = new URL(url).openConnection()
+        conn.setRequestProperty('Authorization', "Basic $auth")
+        // don't modify the path if the source file does not exist
+        def response = conn.responseCode
+        if (response < 200 || response >= 300) return
+        // calculate the checksum of the response data
+        istream = conn.inputStream
+        def digest = MessageDigest.getInstance('SHA1')
+        def buf = new byte[4096]
+        def len = istream.read(buf)
+        while (len != -1) {
+            digest.update(buf, 0, len)
+            len = istream.read(buf)
+        }
+        realchecksum = digest.digest().encodeHex().toString()
+    } finally {
+        // close everything
+        istream?.close()
+        conn?.disconnect()
+    }
+    return realchecksum
 }
