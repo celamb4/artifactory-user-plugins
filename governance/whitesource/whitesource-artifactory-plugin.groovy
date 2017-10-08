@@ -58,7 +58,7 @@ import java.util.zip.ZipOutputStream
 
 @Field final String PROPERTIES_FILE_PATH = 'plugins/whitesource-artifactory-plugin.properties'
 @Field final String AGENT_TYPE = 'artifactory-plugin'
-@Field final String PLUGIN_VERSION = '1.0.8'
+@Field final String PLUGIN_VERSION = '1.0.9'
 @Field final String AGENT_VERSION = '2.3.9'
 @Field final String OR = '|'
 @Field final int MAX_REPO_SIZE = 10000
@@ -120,7 +120,12 @@ download {
             log.info("Virtual repo is currently not supported")
         } else {
             // get local repo artifact sha1
+            def repository = RepoPathFactory.create(rkey)
             log.info("Local repo is currently not supported")
+            List<ItemInfo> items = new ArrayList<>()
+            getRelevantItemSha1(repository, rpath.substring(rpath.lastIndexOf(BACK_SLASH) + 1), items)
+            sha1 = repositories.getFileInfo(items.get(0).getRepoPath()).getChecksumsInfo().getSha1()
+            createProjectAndCheckPolicyForDownload(rpath, sha1, rkey, config)
         }
     }
 }
@@ -642,7 +647,7 @@ private void createProjectAndCheckPolicyForDownload(def rpath, def sha1, def rke
 
         }
     } else {
-        def message = "All th epolicies comform with  :  ${artifactName}"
+        def message = "All the epolicies comform with  :  ${artifactName}"
         log.info message
     }
 }
@@ -709,4 +714,18 @@ private String getRemoteRepoFileSha1(def conf, def rpath){
         conn?.disconnect()
     }
     return realchecksum
+}
+
+private void getRelevantItemSha1(def repository, def fileName, List<ItemInfo> items) {
+    for (ItemInfo item : repositories.getChildren(repository)) {
+        if (item.isFolder()) {
+            getRelevantItemSha1(item.getRepoPath(), fileName, items)
+        } else {
+            if (fileName.equals(item.getName())) {
+                items.add(item)
+                break
+            }
+        }
+    }
+    return
 }
