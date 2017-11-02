@@ -35,6 +35,7 @@ import org.whitesource.agent.api.model.*
 import org.whitesource.agent.api.model.AgentProjectInfo
 import org.whitesource.agent.api.model.PolicyCheckResourceNode
 import org.whitesource.agent.api.model.ResourceInfo
+import org.whitesource.agent.api.model.VulnerabilityInfo.*
 import org.whitesource.agent.api.model.VulnerabilityInfo
 import org.whitesource.agent.client.WhitesourceService
 
@@ -135,15 +136,14 @@ jobs {
      * How to set cron execution:
      * cron (java.lang.String) - A valid cron expression used to schedule job runs (see: http://www.quartz-scheduler.org/docs/tutorial/TutorialLesson06.html)
      * 1 - Seconds , 2 - Minutes, 3 - Hours, 4 - Day-of-Month , 5- Month, 6 - Day-of-Week, 7 - Year (optional field).
-     * Examples :
+     * Example :
      * "0 42 9 * * ?"  - Build a trigger that will fire daily at 9:42 am
-     * "0 0/2 8-17 * * ?" - Build a trigger that will fire every other minute, between 8am and 5pm, every day
      */
-    updateRepoWithWhiteSource(cron: "0 10 10 * * ?") {
+    updateRepoWithWhiteSource(cron: "0 03 20 * * ?") {
         try {
             log.info("Starting job updateRepoData By WhiteSource")
             def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
-            CheckPolicyComplianceResult checkPoliciesResult
+            CheckPolicyComplianceResult checkPoliciesResult = null
             String[] repositories = config.repoKeys as String[]
             Set<String> archiveIncludes = getAllowedFileExtensions(config.archiveIncludes as String[], false)
             Set<String> archiveIncludesWithPrefix = getAllowedFileExtensions(config.archiveIncludes as String[], true)
@@ -159,8 +159,10 @@ jobs {
                 findAllRepoItems(RepoPathFactory.create(repository), sha1ToItemMap, list, archiveIncludes)
                 def compressedFilesFolder = compressOneRepositoryArchiveIntoOneZip(list, repository)
                 int repoSize = sha1ToItemMap.size()
-                if (repoSize > MAX_REPO_SIZE) {
-                    log.warn("The max repository size for check policies in WhiteSource is : ${repoPath} items, Job Exiting")
+                int maxRepoScanSize = config.maxRepoScanSize > 0 ? config.maxRepoScanSize : MAX_REPO_SIZE
+                int maxRepoUploadWssSize = config.maxRepoUploadWssSize > 0 ? config.maxRepoUploadWssSize : MAX_REPO_SIZE_TO_UPLOAD
+                if (repoSize > maxRepoScanSize) {
+                    log.warn("The max repository size for check policies in WhiteSource is : ${maxRepoScanSize} items, Job Exiting")
                 } else if (repoSize == 0) {
                     log.warn("This repository is empty or not exit : ${repository} , Job Exiting")
                 } else {
@@ -169,20 +171,29 @@ jobs {
                     WhitesourceService service = createWhiteSourceService(config)
                     // update WhiteSource with repositories with no more than 2000 artifacts
                     log.info("Sending Update to WhiteSource for repository : ${repository}")
-                    if (repoSize > MAX_REPO_SIZE_TO_UPLOAD) {
-                        log.warn("Max repository size inorder to update WhiteSource is : ${repoPath}")
+                    if (repoSize > maxRepoUploadWssSize) {
+                        log.warn("Max repository size inorder to update WhiteSource is : ${maxRepoUploadWssSize}")
+                        break
                     } else {
                         //updating the WSS service with scanning results
                         if (config.checkPolicies) {
                             checkPoliciesResult = checkPolicies(service, config.apiKey, productName, BLANK, projects, config.forceCheckAllDependencies ,config.forceUpdate)
                         }
-                        if (config.updateWss && ((checkPoliciesResult.hasRejections() != null || !checkPoliciesResult.hasRejections()) || config.forceUpdate)) {
-                            UpdateInventoryResult updateResult = service.update(config.apiKey, productName, BLANK, projects);
-                            logResult(updateResult)
+                        UpdateInventoryResult updateResult = null
+                        if (config.updateWss) {
+                            if (config.forceUpdate) {
+                                updateResult = service.update(config.apiKey, productName, BLANK, projects)
+                                logResult(updateResult)
+                            } else if (checkPoliciesResult != null)  {
+                                if (!checkPoliciesResult.hasRejections()) {
+                                    updateResult = service.update(config.apiKey, productName, BLANK, projects)
+                                    logResult(updateResult)
+                                }
+                            }
                         }
+                        populateArtifactoryPropertiesTab(projects, config, repository, service, sha1ToItemMap, checkPoliciesResult, productName)
+                        deleteTemporaryFolders(compressedFilesFolder)
                     }
-                    populateArtifactoryPropertiesTab(projects, config, repository, service, sha1ToItemMap, checkPoliciesResult, productName)
-                    deleteTemporaryFolders(compressedFilesFolder)
                 }
             }
         } catch (Exception e) {
@@ -191,6 +202,7 @@ jobs {
         log.info("Job updateRepoWithWhiteSource has Finished")
     }
 }
+
 storage {
 
     /**
@@ -372,7 +384,7 @@ private void populateArtifactoryPropertiesTab(Collection<AgentProjectInfo> proje
         log.info("Updating additional dependency data")
         updateItemsExtraData(dependencyDataResult, sha1ToItemMap)
         log.info("Finished updating additional dependency data")
-        if (config.checkPolicies) {
+        if (config.checkPolicies && checkPoliciesResult != null) {
             log.info("Updating policies for repository: ${repoName}")
             handleCheckPoliciesResults(checkPoliciesResult.getNewProjects(), sha1ToItemMap)
             handleCheckPoliciesResults(checkPoliciesResult.getExistingProjects(), sha1ToItemMap)
