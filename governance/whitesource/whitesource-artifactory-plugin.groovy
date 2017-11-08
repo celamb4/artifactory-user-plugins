@@ -139,7 +139,7 @@ jobs {
      * Example :
      * "0 42 9 * * ?"  - Build a trigger that will fire daily at 9:42 am
      */
-    updateRepoWithWhiteSource(cron: "0 03 20 * * ?") {
+    updateRepoWithWhiteSource(cron: "0 17 20 * * ?") {
         try {
             log.info("Starting job updateRepoData By WhiteSource")
             def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
@@ -169,31 +169,31 @@ jobs {
                     // create project and WhiteSource service
                     Collection<AgentProjectInfo> projects = createProjects(sha1ToItemMap, repository, compressedFilesFolder, includesRepositoryContent, archiveIncludesWithPrefix)
                     WhitesourceService service = createWhiteSourceService(config)
-                    // update WhiteSource with repositories with no more than 2000 artifacts
-                    log.info("Sending Update to WhiteSource for repository : ${repository}")
+                    // update WhiteSource with repositories
+                    if (config.checkPolicies) {
+                        checkPoliciesResult = checkPolicies(service, config.apiKey, productName, BLANK, projects, config.forceCheckAllDependencies ,config.forceUpdate)
+                    }
                     if (repoSize > maxRepoUploadWssSize) {
                         log.warn("Max repository size inorder to update WhiteSource is : ${maxRepoUploadWssSize}")
-                        break
                     } else {
                         //updating the WSS service with scanning results
-                        if (config.checkPolicies) {
-                            checkPoliciesResult = checkPolicies(service, config.apiKey, productName, BLANK, projects, config.forceCheckAllDependencies ,config.forceUpdate)
-                        }
                         UpdateInventoryResult updateResult = null
                         if (config.updateWss) {
                             if (config.forceUpdate) {
+                                log.info("Sending Update to WhiteSource for repository : ${repository}")
                                 updateResult = service.update(config.apiKey, productName, BLANK, projects)
                                 logResult(updateResult)
                             } else if (checkPoliciesResult != null)  {
+                                log.info("Sending Update to WhiteSource for repository : ${repository}")
                                 if (!checkPoliciesResult.hasRejections()) {
                                     updateResult = service.update(config.apiKey, productName, BLANK, projects)
                                     logResult(updateResult)
                                 }
                             }
                         }
-                        populateArtifactoryPropertiesTab(projects, config, repository, service, sha1ToItemMap, checkPoliciesResult, productName)
-                        deleteTemporaryFolders(compressedFilesFolder)
                     }
+                    populateArtifactoryPropertiesTab(projects, config, repository, service, sha1ToItemMap, checkPoliciesResult, productName)
+                    deleteTemporaryFolders(compressedFilesFolder)
                 }
             }
         } catch (Exception e) {
