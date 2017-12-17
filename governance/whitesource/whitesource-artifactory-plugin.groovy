@@ -139,7 +139,7 @@ jobs {
      * Example :
      * "0 42 9 * * ?"  - Build a trigger that will fire daily at 9:42 am
      */
-    updateRepoWithWhiteSource(cron: "0 17 20 * * ?") {
+    updateRepoWithWhiteSource(cron: "0 09 10 * * ?") {
         try {
             log.info("Starting job updateRepoData By WhiteSource")
             def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
@@ -159,8 +159,8 @@ jobs {
                 findAllRepoItems(RepoPathFactory.create(repository), sha1ToItemMap, list, archiveIncludes)
                 def compressedFilesFolder = compressOneRepositoryArchiveIntoOneZip(list, repository)
                 int repoSize = sha1ToItemMap.size()
-                int maxRepoScanSize = config.maxRepoScanSize > 0 ? config.maxRepoScanSize : MAX_REPO_SIZE
-                int maxRepoUploadWssSize = config.maxRepoUploadWssSize > 0 ? config.maxRepoUploadWssSize : MAX_REPO_SIZE_TO_UPLOAD
+                int maxRepoScanSize = config.containsKey('maxRepoScanSize') ? config.maxRepoScanSize > 0 ? config.maxRepoScanSize : MAX_REPO_SIZE : MAX_REPO_SIZE
+                int maxRepoUploadWssSize = config.containsKey('maxRepoUploadWssSize') ? config.maxRepoUploadWssSize > 0 ? config.maxRepoUploadWssSize : MAX_REPO_SIZE_TO_UPLOAD : MAX_REPO_SIZE_TO_UPLOAD
                 if (repoSize > maxRepoScanSize) {
                     log.warn("The max repository size for check policies in WhiteSource is : ${maxRepoScanSize} items, Job Exiting")
                 } else if (repoSize == 0) {
@@ -413,7 +413,7 @@ private Collection<AgentProjectInfo> createProjects(Map<String, ItemInfo> sha1To
             if (oneFile.getPath().toString().endsWith(archiveName)) {
                 compressedFilesFolderName = oneFile.getPath()
                 String currentArchiveFileNameWithPrefix = GLOB_PATTERN_PREFIX + sha1ToItemMap.get(key).getName()
-                String [] exclude = [currentArchiveFileNameWithPrefix]
+                String [] exclude = [sha1ToItemMap.get(key).getName()]//'' //[currentArchiveFileNameWithPrefix]
                 List<DependencyInfo> dependencyInfos = new FileSystemScanner(false, null).createDependencies(
                         Arrays.asList(compressedFilesFolderName), null, includesRepositoryContent , exclude, CASE_SENSITIVE_GLOB,
                         ARCHIVE_EXTRACTION_DEPTH, allowedFileExtensions.toArray(new String[allowedFileExtensions.size()]), new String[0], false, FOLLOW_SYMLINKS, new ArrayList<String>(), PARTIAL_SHA1_MATCH)
@@ -510,11 +510,12 @@ private List<File> compressOneRepositoryArchiveIntoOneZip(List list, String repo
     FileOutputStream fileOutputStream
     ZipOutputStream zipOutputStream
     for (int i =0; i < list.size() ; i++) {
-        File destDir = new File(TEMP_DOWNLOAD_DIRECTORY + File.separator + repository + '_' + System.nanoTime() + "_" + list.get(i).getPath())
+        def artifactName = list.get(i).getPath().substring(list.get(i).getPath().lastIndexOf(BACK_SLASH) + 1)
+        File destDir = new File(TEMP_DOWNLOAD_DIRECTORY + File.separator + repository + System.nanoTime() + File.separator + artifactName)//+ list.get(i).getPath())
         if (!destDir.exists()) {
             destDir.mkdirs()
         }
-        archiveFile = new File(destDir.getPath() + File.separator +  list.get(i).getPath())
+        archiveFile = new File(destDir.getPath() + File.separator + artifactName)  //list.get(i).getPath())
         fileOutputStream = new FileOutputStream(archiveFile)
         zipOutputStream = new ZipOutputStream(fileOutputStream)
         ZipEntry ze = new ZipEntry(list.get(i).getPath())
