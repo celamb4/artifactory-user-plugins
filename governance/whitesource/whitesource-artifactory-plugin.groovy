@@ -38,12 +38,21 @@ import org.whitesource.agent.api.model.ResourceInfo
 import org.whitesource.agent.api.model.VulnerabilityInfo.*
 import org.whitesource.agent.api.model.VulnerabilityInfo
 import org.whitesource.agent.client.WhitesourceService
+import org.whitesource.agent.FileSystemScanner
+import org.whitesource.agent.api.model.AgentProjectInfo
+import org.whitesource.agent.api.model.DependencyInfo
+import org.whitesource.fs.configuration.ConfigurationSerializer
+import org.whitesource.fs.configuration.ResolverConfiguration
+import org.whitesource.fs.configuration.*
+import org.whitesource.fs.FSAConfiguration
 
 import javax.ws.rs.core.*
 import javax.ws.rs.core.*
 import java.security.MessageDigest
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import java.util.Properties
+
 
 @Field final String ACTION = 'WSS-Action'
 @Field final String POLICY_DETAILS = 'WSS-Policy-Details'
@@ -59,8 +68,8 @@ import java.util.zip.ZipOutputStream
 
 @Field final String PROPERTIES_FILE_PATH = 'plugins/whitesource-artifactory-plugin.properties'
 @Field final String AGENT_TYPE = 'artifactory-plugin'
-@Field final String PLUGIN_VERSION = '1.0.9'
-@Field final String AGENT_VERSION = '2.3.9'
+@Field final String PLUGIN_VERSION = '18.5.1'
+@Field final String AGENT_VERSION = '2.6.9'
 @Field final String OR = '|'
 @Field final int MAX_REPO_SIZE = 10000
 @Field final int MAX_REPO_SIZE_TO_UPLOAD = 2000
@@ -139,7 +148,7 @@ jobs {
      * Example :
      * "0 42 9 * * ?"  - Build a trigger that will fire daily at 9:42 am
      */
-    updateRepoWithWhiteSource(cron: "0 09 10 * * ?") {
+    updateRepoWithWhiteSource(cron: "0 01 17 * * ?") {
         try {
             log.info("Starting job updateRepoData By WhiteSource")
             def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
@@ -170,36 +179,53 @@ jobs {
                     Collection<AgentProjectInfo> projects = createProjects(sha1ToItemMap, repository, compressedFilesFolder, includesRepositoryContent, archiveIncludesWithPrefix)
                     WhitesourceService service = createWhiteSourceService(config)
                     // update WhiteSource with repositories
+                    String userKey = null
+                    if (config.containsKey('userKey')) {
+                        userKey = config.userKey
+                    }
                     if (config.checkPolicies) {
-                        checkPoliciesResult = checkPolicies(service, config.apiKey, productName, BLANK, projects, config.forceCheckAllDependencies ,config.forceUpdate)
+                        checkPoliciesResult = checkPolicies(service, config.apiKey, productName, BLANK, projects, config.forceCheckAllDependencies ,config.forceUpdate, userKey)
+                        if (checkPoliciesResult == null) {
+                            break
+                        }
                     }
                     if (repoSize > maxRepoUploadWssSize) {
                         log.warn("Max repository size inorder to update WhiteSource is : ${maxRepoUploadWssSize}")
                     } else {
                         //updating the WSS service with scanning results
                         UpdateInventoryResult updateResult = null
-                        if (config.updateWss) {
-                            if (config.forceUpdate) {
-                                log.info("Sending Update to WhiteSource for repository : ${repository}")
-                                updateResult = service.update(config.apiKey, productName, BLANK, projects)
-                                logResult(updateResult)
-                            } else if (checkPoliciesResult != null)  {
-                                log.info("Sending Update to WhiteSource for repository : ${repository}")
-                                if (!checkPoliciesResult.hasRejections()) {
-                                    updateResult = service.update(config.apiKey, productName, BLANK, projects)
+                        try {
+                            if (config.updateWss) {
+                                if (config.forceUpdate) {
+                                    log.info("Sending Update to WhiteSource for repository : ${repository}")
+                                    updateResult = service.update(config.apiKey, productName, BLANK, projects, userKey)
                                     logResult(updateResult)
+                                } else if (checkPoliciesResult != null) {
+                                    log.info("Sending Update to WhiteSource for repository : ${repository}")
+                                    if (!checkPoliciesResult.hasRejections()) {
+                                        updateResult = service.update(config.apiKey, productName, BLANK, projects, userKey)
+                                        logResult(updateResult)
+                                    }
                                 }
                             }
+                        } catch (Exception e) {
+                            log.error(e.getMessage())
+                            break
                         }
                     }
-                    populateArtifactoryPropertiesTab(projects, config, repository, service, sha1ToItemMap, checkPoliciesResult, productName)
+                    try {
+                        populateArtifactoryPropertiesTab(projects, config, repository, service, sha1ToItemMap, checkPoliciesResult, productName, userKey)
+                    } catch (Exception e) {
+                        log.error(e.getMessage())
+                        break
+                    }
                     deleteTemporaryFolders(compressedFilesFolder)
+                    log.info("Job updateRepoWithWhiteSource has Finished")
                 }
             }
         } catch (Exception e) {
-            log.warn("Error while running the plugin: ", e)
+            log.warn("Error while running the plugin: ", e.getMessage())
         }
-        log.info("Job updateRepoWithWhiteSource has Finished")
     }
 }
 
@@ -223,15 +249,20 @@ storage {
                 def repoKey = item.getRepoKey()
                 Collection<AgentProjectInfo> projects = createProjects(sha1ToItemMap, repoKey, fileList, includesRepositoryContent, allowedFileExtensions)
                 WhitesourceService whitesourceService = createWhiteSourceService(config)
-                CheckPolicyComplianceResult checkPoliciesResult = checkPolicies(whitesourceService, config.apiKey, repoKey, BLANK, projects, false, false)
-                String productName = config.productName != null ? config.productName : repository
-                populateArtifactoryPropertiesTab(projects, config, repoKey, whitesourceService, sha1ToItemMap, checkPoliciesResult, productName)
+                String userKey = null
+                if (config.containsKey('userKey')) {
+                    userKey = config.userKey
+                }
+                CheckPolicyComplianceResult checkPoliciesResult = checkPolicies(whitesourceService, config.apiKey, repoKey, BLANK, projects, false, false, userKey)
+                if (checkPoliciesResult != null) {
+                    String productName = config.productName != null ? config.productName : repository
+                    populateArtifactoryPropertiesTab(projects, config, repoKey, whitesourceService, sha1ToItemMap, checkPoliciesResult, productName, userKey)
+                    log.info("New Item - {$item} was added to the repository")
+                }
             }
         } catch (Exception e) {
             log.warn("Error creating WhiteSource Service " + e)
         }
-
-        log.info("New Item - {$item} was added to the repository")
     }
 }
 
@@ -375,12 +406,12 @@ private void findAllRepoItems(
 
 private void populateArtifactoryPropertiesTab(Collection<AgentProjectInfo> projects, def config, String repoName,
                                               WhitesourceService whitesourceService, Map<String, ItemInfo> sha1ToItemMap,
-                                              CheckPolicyComplianceResult checkPoliciesResult, String productName) {
+                                              CheckPolicyComplianceResult checkPoliciesResult, String productName, String userKey) {
     // get policies and dependency data result and update properties tab for each artifact
     try {
         int repoSize = sha1ToItemMap.size()
         log.info("Finished updating WhiteSource with ${repoSize} artifacts")
-        GetDependencyDataResult dependencyDataResult = whitesourceService.getDependencyData(config.apiKey, productName, BLANK, projects)
+        GetDependencyDataResult dependencyDataResult = whitesourceService.getDependencyData(config.apiKey, productName, BLANK, projects, userKey)
         log.info("Updating additional dependency data")
         updateItemsExtraData(dependencyDataResult, sha1ToItemMap)
         log.info("Finished updating additional dependency data")
@@ -395,7 +426,8 @@ private void populateArtifactoryPropertiesTab(Collection<AgentProjectInfo> proje
     }
 }
 
-private Collection<AgentProjectInfo> createProjects(Map<String, ItemInfo> sha1ToItemMap, String repoName, List<File> compressedFilesFolder, String[] includesRepositoryContent, Set<String> allowedFileExtensions) {
+private Collection<AgentProjectInfo> createProjects(Map<String, ItemInfo> sha1ToItemMap, String repoName, List<File> compressedFilesFolder,
+                                                    String[] includesRepositoryContent, Set<String> allowedFileExtensions) {
     Collection<AgentProjectInfo> projects = new ArrayList<AgentProjectInfo>()
     AgentProjectInfo projectInfo = new AgentProjectInfo()
     projects.add(projectInfo)
@@ -407,30 +439,41 @@ private Collection<AgentProjectInfo> createProjects(Map<String, ItemInfo> sha1To
         dependencyInfo.setArtifactId(archiveName)
         dependencies.add(dependencyInfo)
         String compressedFilesFolderName = null
-        File oneFile
+        File compressedFile
         for (int i = 0; i < compressedFilesFolder.size(); i++) {
-            oneFile = compressedFilesFolder.get(i)
-            if (oneFile.getPath().toString().endsWith(archiveName)) {
-                compressedFilesFolderName = oneFile.getPath()
+            compressedFile = compressedFilesFolder.get(i)
+            if (compressedFile.getPath().toString().endsWith(archiveName)) {
+                compressedFilesFolderName = compressedFile.getPath()
                 String currentArchiveFileNameWithPrefix = GLOB_PATTERN_PREFIX + sha1ToItemMap.get(key).getName()
                 String [] exclude = [sha1ToItemMap.get(key).getName()]//'' //[currentArchiveFileNameWithPrefix]
-                List<DependencyInfo> dependencyInfos = new FileSystemScanner(false, null).createDependencies(
-                        Arrays.asList(compressedFilesFolderName), null, includesRepositoryContent , exclude, CASE_SENSITIVE_GLOB,
-                        ARCHIVE_EXTRACTION_DEPTH, allowedFileExtensions.toArray(new String[allowedFileExtensions.size()]), new String[0], false, FOLLOW_SYMLINKS, new ArrayList<String>(), PARTIAL_SHA1_MATCH)
+                java.util.Properties properties= new Properties()
+                properties.put('includes', includesRepositoryContent)
+                properties.put('excludes', exclude)
+                FSAConfiguration fsaConfiguration = new FSAConfiguration(properties)
+                ResolverConfiguration resolverConfiguration = fsaConfiguration.getResolver()
+                Map<String, Set<String>> appPathsToDependencyDirs = new HashMap<>()
+                List<DependencyInfo> dependencyInfos = new FileSystemScanner(resolverConfiguration, fsaConfiguration.getAgent(), false).createProjects(
+                        Arrays.asList(compressedFilesFolderName), appPathsToDependencyDirs, false, includesRepositoryContent, exclude, CASE_SENSITIVE_GLOB,
+                        ARCHIVE_EXTRACTION_DEPTH, allowedFileExtensions.toArray(new String[allowedFileExtensions.size()]), new String[0],
+                        false, FOLLOW_SYMLINKS, new ArrayList<>(), PARTIAL_SHA1_MATCH)
                 dependencyInfo.getChildren().addAll(dependencyInfos)
                 break
             }
         }
     }
-
     projectInfo.setDependencies(dependencies)
     return projects
 }
 
 private CheckPolicyComplianceResult checkPolicies(WhitesourceService service, String orgToken, String product, String productVersion,
-                                                  Collection<AgentProjectInfo> projects, boolean forceCheckAllDependencies, boolean  forceUpdate ) {
+                                                  Collection<AgentProjectInfo> projects, boolean forceCheckAllDependencies, boolean  forceUpdate, String userKey) {
     log.info("Checking policies")
-    CheckPolicyComplianceResult checkPoliciesResult = service.checkPolicyCompliance(orgToken, product, productVersion, projects, forceCheckAllDependencies)
+    try {
+        CheckPolicyComplianceResult checkPoliciesResult = service.checkPolicyCompliance(orgToken, product, productVersion, projects, forceCheckAllDependencies, userKey)
+    } catch (Exception e) {
+        log.error(e.getMessage())
+        return null
+    }
     boolean hasRejections = checkPoliciesResult.hasRejections()
     if (hasRejections && !forceUpdate) {
         log.info("Some dependencies did not conform with open source policies")
@@ -452,7 +495,8 @@ private WhitesourceService createWhiteSourceService(def config) {
     }
     try {
         // create whiteSource service and check proxy settings
-        WhitesourceService service = new WhitesourceService(AGENT_TYPE, AGENT_VERSION, PLUGIN_VERSION,url, setProxy, DEFAULT_CONNECTION_TIMEOUT_MINUTES)
+        // default value for certificate check is false
+        WhitesourceService service = new WhitesourceService(AGENT_TYPE, AGENT_VERSION, PLUGIN_VERSION, url, setProxy, DEFAULT_CONNECTION_TIMEOUT_MINUTES, false)
         if (setProxy) {
             checkAndSetProxySettings(service, config)
         }
@@ -540,89 +584,11 @@ private List<File> compressOneRepositoryArchiveIntoOneZip(List list, String repo
 
 private String [] buildDefaults(){
     String [] defaultArray = [
-            "as",
-            "asp",
-            "aspx",
-            "c",
-            "h",
-            "s",
-            "cc",
-            "cp",
-            "cpp",
-            "cxx",
-            "c++",
-            "hpp",
-            "hxx",
-            "h++",
-            "hh",
-            "mm",
-            "c#",
-            "cs",
-            "csharp",
-            "go",
-            "goc",
-            "html",
-            "m",
-            "pch",
-            "java",
-            "js",
-            "jsp",
-            "pl",
-            "plx",
-            "pm",
-            "ph",
-            "cgi",
-            "fcgi",
-            "psgi",
-            "al",
-            "perl",
-            "t",
-            "p6m",
-            "p6l",
-            "nqp",
-            "6pl",
-            "6pm",
-            "p6",
-            "php",
-            "py",
-            "rb",
-            "swift",
-            "clj",
-            "cljc",
-            "cljs",
-            "cljx",
-            "y",
-            "jar",
-            "war",
-            "aar",
-            "ear",
-            "dll",
-            "exe",
-            "msi",
-            "gem",
-            "egg",
-            "tar.gz",
-            "whl",
-            "rpm",
-            "deb",
-            "drpm",
-            "dmg",
-            "udeb",
-            "so",
-            "ko",
-            "a",
-            "ar",
-            "nupkg",
-            "air",
-            "apk",
-            "swc",
-            "swf",
-            "bz2",
-            "gzip",
-            "tar.bz2",
-            "tgz",
-            "zip"
-    ]
+            "as", "asp", "aspx", "c", "h", "s", "cc", "cp", "cpp", "cxx", "c++", "hpp", "hxx", "h++", "hh", "mm", "c#", "cs",
+            "csharp", "go", "goc", "html", "m", "pch", "java", "js", "jsp", "pl", "plx", "pm", "ph", "cgi", "fcgi", "psgi",
+            "al", "perl", "t", "p6m", "p6l", "nqp", "6pl", "6pm", "p6", "php", "py", "rb", "swift", "clj", "cljc", "cljs",
+            "cljx", "y", "jar", "war", "aar", "ear", "dll", "exe", "msi", "gem", "egg", "tar.gz", "whl", "rpm", "deb", "drpm",
+            "dmg", "udeb", "so", "ko", "a", "ar", "nupkg", "air", "apk", "swc", "swf", "bz2", "gzip", "tar.bz2", "tgz", "zip"]
     return defaultArray
 }
 
@@ -639,29 +605,40 @@ private void createProjectAndCheckPolicyForDownload(def rpath, def sha1, def rke
     String productName = config.productName != null ? config.productName : rkey
     Collection<AgentProjectInfo> projects = createProjectWithOneDependency(sha1, artifactName, rkey)
     WhitesourceService whitesourceService = createWhiteSourceService(config)
-    CheckPolicyComplianceResult checkPoliciesResult = checkPolicies(whitesourceService, config.apiKey, rkey, BLANK, projects, false ,false)
+    String userKey = null
+    if (config.containsKey('userKey')) {
+        userKey = config.userKey
+    }
+    CheckPolicyComplianceResult checkPoliciesResult
+    try {
+        checkPoliciesResult = checkPolicies(whitesourceService, config.apiKey, rkey, BLANK, projects, false, false, userKey)
+    } catch (Exception e) {
+        log.error(e.getMessage())
+    }
     def name = ''
-    if (checkPoliciesResult.hasRejections() == true) {
-        def project = checkPoliciesResult.getNewProjects()
-        for (String key : project.keySet()) {
-            PolicyCheckResourceNode policyCheckResourceNode = project.get(key)
-            Collection<PolicyCheckResourceNode> children = policyCheckResourceNode.getChildren()
-            for (PolicyCheckResourceNode child : children) {
-                name = child.getPolicy().getDisplayName()
+    if (checkPoliciesResult != null) {
+        if (checkPoliciesResult.hasRejections() == true) {
+            def project = checkPoliciesResult.getNewProjects()
+            for (String key : project.keySet()) {
+                PolicyCheckResourceNode policyCheckResourceNode = project.get(key)
+                Collection<PolicyCheckResourceNode> children = policyCheckResourceNode.getChildren()
+                for (PolicyCheckResourceNode child : children) {
+                    name = child.getPolicy().getDisplayName()
+                }
             }
-        }
-        def status = 403
-        def message = "${artifactName} did not conform with open source policies :  ${name}"
-        log.warn message
-        throw new CancelException(message, status) {
-            public Throwable fillInStackTrace() {
-                return null
-            }
+            def status = 403
+            def message = "${artifactName} did not conform with open source policies :  ${name}"
+            log.warn message
+            throw new CancelException(message, status) {
+                public Throwable fillInStackTrace() {
+                    return null
+                }
 
+            }
+        } else {
+            def message = "All the epolicies comform with  :  ${artifactName}"
+            log.info message
         }
-    } else {
-        def message = "All the epolicies comform with  :  ${artifactName}"
-        log.info message
     }
 }
 
