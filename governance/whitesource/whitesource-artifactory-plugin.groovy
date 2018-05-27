@@ -148,7 +148,7 @@ jobs {
      * Example :
      * "0 42 9 * * ?"  - Build a trigger that will fire daily at 9:42 am
      */
-    updateRepoWithWhiteSource(cron: "0 01 17 * * ?") {
+    updateRepoWithWhiteSource(cron: "0 30 10 * * ?") {
         try {
             log.info("Starting job updateRepoData By WhiteSource")
             def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
@@ -468,21 +468,24 @@ private Collection<AgentProjectInfo> createProjects(Map<String, ItemInfo> sha1To
 private CheckPolicyComplianceResult checkPolicies(WhitesourceService service, String orgToken, String product, String productVersion,
                                                   Collection<AgentProjectInfo> projects, boolean forceCheckAllDependencies, boolean  forceUpdate, String userKey) {
     log.info("Checking policies")
+    CheckPolicyComplianceResult checkPoliciesResult = null
     try {
-        CheckPolicyComplianceResult checkPoliciesResult = service.checkPolicyCompliance(orgToken, product, productVersion, projects, forceCheckAllDependencies, userKey)
+        checkPoliciesResult = service.checkPolicyCompliance(orgToken, product, productVersion, projects, forceCheckAllDependencies, userKey)
     } catch (Exception e) {
         log.error(e.getMessage())
         return null
     }
-    boolean hasRejections = checkPoliciesResult.hasRejections()
-    if (hasRejections && !forceUpdate) {
-        log.info("Some dependencies did not conform with open source policies")
-        log.info("=== UPDATE ABORTED ===")
-    } else {
-        String message = hasRejections ? "Some dependencies violate open source policies, however all were force " +
-                "updated to organization inventory." :
-                "All dependencies conform with open source policies."
-        log.info(message)
+    if (checkPoliciesResult != null) {
+        boolean hasRejections = checkPoliciesResult.hasRejections()
+        if (hasRejections && !forceUpdate) {
+            log.info("Some dependencies did not conform with open source policies")
+            log.info("=== UPDATE ABORTED ===")
+        } else {
+            String message = hasRejections ? "Some dependencies violate open source policies, however all were force " +
+                    "updated to organization inventory." :
+                    "All dependencies conform with open source policies."
+            log.info(message)
+        }
     }
     return checkPoliciesResult
 }
