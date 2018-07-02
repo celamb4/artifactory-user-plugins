@@ -69,7 +69,7 @@ import java.util.Properties
 @Field final String PROPERTIES_FILE_PATH = 'plugins/whitesource-artifactory-plugin.properties'
 @Field final String AGENT_TYPE = 'artifactory-plugin'
 @Field final String PLUGIN_VERSION = '18.5.1'
-@Field final String AGENT_VERSION = '2.7.0'
+@Field final String AGENT_VERSION = '2.6.9'
 @Field final String OR = '|'
 @Field final int MAX_REPO_SIZE = 10000
 @Field final int MAX_REPO_SIZE_TO_UPLOAD = 2000
@@ -148,7 +148,7 @@ jobs {
      * Example :
      * "0 42 9 * * ?"  - Build a trigger that will fire daily at 9:42 am
      */
-    updateRepoWithWhiteSource(cron: "0 30 10 * * ?") {
+    updateRepoWithWhiteSource(cron: "0 45 23 * * ?") {
         try {
             log.info("Starting job updateRepoData By WhiteSource")
             def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
@@ -196,7 +196,7 @@ jobs {
                         UpdateInventoryResult updateResult = null
                         try {
                             if (config.updateWss) {
-                                if (config.forceUpdate) {
+                                if (config.forceUpdate || !config.checkPolicies) {
                                     log.info("Sending Update to WhiteSource for repository : ${repository}")
                                     updateResult = service.update(config.apiKey, productName, BLANK, projects, userKey)
                                     logResult(updateResult)
@@ -440,6 +440,14 @@ private Collection<AgentProjectInfo> createProjects(Map<String, ItemInfo> sha1To
         dependencies.add(dependencyInfo)
         String compressedFilesFolderName = null
         File compressedFile
+        ResolverConfiguration resolverConfiguration = fsaConfiguration.getResolver()
+        // set resolvers to false
+        resolverConfiguration.setBowerResolveDependencies(false)
+        resolverConfiguration.setGradleResolveDependencies(false)
+        resolverConfiguration.setMavenResolveDependencies(false)
+        resolverConfiguration.setNpmResolveDependencies(false)
+        resolverConfiguration.setNugetResolveDependencies(false)
+        resolverConfiguration.setPythonResolveDependencies(false)
         for (int i = 0; i < compressedFilesFolder.size(); i++) {
             compressedFile = compressedFilesFolder.get(i)
             if (compressedFile.getPath().toString().endsWith(archiveName)) {
@@ -450,7 +458,6 @@ private Collection<AgentProjectInfo> createProjects(Map<String, ItemInfo> sha1To
                 properties.put('includes', includesRepositoryContent)
                 properties.put('excludes', exclude)
                 FSAConfiguration fsaConfiguration = new FSAConfiguration(properties)
-                ResolverConfiguration resolverConfiguration = fsaConfiguration.getResolver()
                 Map<String, Set<String>> appPathsToDependencyDirs = new HashMap<>()
                 List<DependencyInfo> dependencyInfos = new FileSystemScanner(resolverConfiguration, fsaConfiguration.getAgent(), false).createProjects(
                         Arrays.asList(compressedFilesFolderName), appPathsToDependencyDirs, false, includesRepositoryContent, exclude, CASE_SENSITIVE_GLOB,
