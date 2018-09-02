@@ -68,7 +68,7 @@ import java.util.Properties
 
 @Field final String PROPERTIES_FILE_PATH = 'plugins/whitesource-artifactory-plugin.properties'
 @Field final String AGENT_TYPE = 'artifactory-plugin'
-@Field final String PLUGIN_VERSION = '18.6.3'
+@Field final String PLUGIN_VERSION = '18.8.2'
 @Field final String AGENT_VERSION = '2.7.0'
 @Field final String OR = '|'
 @Field final int MAX_REPO_SIZE = 10000
@@ -116,26 +116,30 @@ download {
         def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
         def rpath = repoPath.path
         def rkey = repoPath.repoKey
-        //request.httpRequest.request.coyoteRequest.serverNameMB.strValue
         // get the url of the remote repo
         def repositoryConf = repositories.getRepositoryConfiguration(rkey)
         def type = repositoryConf.type
         String sha1 = null
-        if (REMOTE.equals(type)) {
-            // get remote repo artifact sha1
-            sha1 = getRemoteRepoFileSha1(repositoryConf, rpath)
-            createProjectAndCheckPolicyForDownload(rpath, sha1, rkey, config)
-        } else if (VIRTUAL.equals(type)) {
-            // get virtual repo artifact sha1
-            log.info("Virtual repo is currently not supported")
-        } else {
-            // get local repo artifact sha1
-            def repository = RepoPathFactory.create(rkey)
-            log.info("Local repo is currently not supported")
-            List<ItemInfo> items = new ArrayList<>()
-            getRelevantItemSha1(repository, rpath.substring(rpath.lastIndexOf(BACK_SLASH) + 1), items)
-            sha1 = repositories.getFileInfo(items.get(0).getRepoPath()).getChecksumsInfo().getSha1()
-            createProjectAndCheckPolicyForDownload(rpath, sha1, rkey, config)
+        try {
+            if (REMOTE.equals(type)) {
+                // get remote repo artifact sha1
+                sha1 = getRemoteRepoFileSha1(repositoryConf, rpath)
+                createProjectAndCheckPolicyForDownload(rpath, sha1, rkey, config)
+            } else if (VIRTUAL.equals(type)) {
+                // get virtual repo artifact sha1
+                log.info("Virtual repo is currently not supported")
+            } else {
+                // get local repo artifact sha1
+                def repository = RepoPathFactory.create(rkey)
+                List<ItemInfo> items = new ArrayList<>()
+                getRelevantItemSha1(repository, rpath.substring(rpath.lastIndexOf(BACK_SLASH) + 1), items)
+                if (!items.isEmpty()) {
+                    sha1 = repositories.getFileInfo(items.get(0).getRepoPath()).getChecksumsInfo().getSha1()
+                    createProjectAndCheckPolicyForDownload(rpath, sha1, rkey, config)
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to get dependency" + e)
         }
     }
 }
