@@ -27,6 +27,7 @@ import org.artifactory.repo.RepoPathFactory
 import org.artifactory.request.*
 import org.artifactory.resource.*
 import org.artifactory.util.*
+import org.artifactory.exception.CancelException
 import org.whitesource.agent.FileSystemScanner
 import org.whitesource.agent.api.dispatch.CheckPolicyComplianceResult
 import org.whitesource.agent.api.dispatch.GetDependencyDataResult
@@ -68,7 +69,7 @@ import java.util.Properties
 
 @Field final String PROPERTIES_FILE_PATH = 'plugins/whitesource-artifactory-plugin.properties'
 @Field final String AGENT_TYPE = 'artifactory-plugin'
-@Field final String PLUGIN_VERSION = '18.8.2'
+@Field final String PLUGIN_VERSION = '18.10.3'
 @Field final String AGENT_VERSION = '2.7.0'
 @Field final String OR = '|'
 @Field final int MAX_REPO_SIZE = 10000
@@ -114,32 +115,38 @@ download {
 
     beforeDownloadRequest { request, repoPath ->
         def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
-        def rpath = repoPath.path
-        def rkey = repoPath.repoKey
-        // get the url of the remote repo
-        def repositoryConf = repositories.getRepositoryConfiguration(rkey)
-        def type = repositoryConf.type
-        String sha1 = null
-        try {
-            if (REMOTE.equals(type)) {
-                // get remote repo artifact sha1
-                sha1 = getRemoteRepoFileSha1(repositoryConf, rpath)
-                createProjectAndCheckPolicyForDownload(rpath, sha1, rkey, config)
-            } else if (VIRTUAL.equals(type)) {
-                // get virtual repo artifact sha1
-                log.info("Virtual repo is currently not supported")
-            } else {
-                // get local repo artifact sha1
-                def repository = RepoPathFactory.create(rkey)
-                List<ItemInfo> items = new ArrayList<>()
-                getRelevantItemSha1(repository, rpath.substring(rpath.lastIndexOf(BACK_SLASH) + 1), items)
-                if (!items.isEmpty()) {
-                    sha1 = repositories.getFileInfo(items.get(0).getRepoPath()).getChecksumsInfo().getSha1()
+        def triggerBeforeDownload = true
+        if(config.containsKey('triggerBeforeDownload')) {
+            triggerBeforeDownload = config.triggerBeforeDownload
+        }
+        if (triggerBeforeDownload) {
+            def rpath = repoPath.path
+            def rkey = repoPath.repoKey
+            // get the url of the remote repo
+            def repositoryConf = repositories.getRepositoryConfiguration(rkey)
+            def type = repositoryConf.type
+            String sha1 = null
+            try {
+                if (REMOTE.equals(type)) {
+                    // get remote repo artifact sha1
+                    sha1 = getRemoteRepoFileSha1(repositoryConf, rpath)
                     createProjectAndCheckPolicyForDownload(rpath, sha1, rkey, config)
+                } else if (VIRTUAL.equals(type)) {
+                    // get virtual repo artifact sha1
+                    log.info("Virtual repo is currently not supported")
+                } else {
+                    // get local repo artifact sha1
+                    def repository = RepoPathFactory.create(rkey)
+                    List<ItemInfo> items = new ArrayList<>()
+                    getRelevantItemSha1(repository, rpath.substring(rpath.lastIndexOf(BACK_SLASH) + 1), items)
+                    if (!items.isEmpty()) {
+                        sha1 = repositories.getFileInfo(items.get(0).getRepoPath()).getChecksumsInfo().getSha1()
+                        createProjectAndCheckPolicyForDownload(rpath, sha1, rkey, config)
+                    }
                 }
+            } catch (Exception e) {
+                log.warn("Failed to get dependency" + e)
             }
-        } catch (Exception e) {
-            log.warn("Failed to get dependency" + e)
         }
     }
 }
@@ -152,7 +159,7 @@ jobs {
      * Example :
      * "0 42 9 * * ?"  - Build a trigger that will fire daily at 9:42 am
      */
-    updateRepoWithWhiteSource(cron: "0 45 23 * * ?") {
+    updateRepoWithWhiteSource(cron: "0 07 10 * * ?") {
         try {
             log.info("Starting job updateRepoData By WhiteSource")
             def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
@@ -245,26 +252,32 @@ storage {
         try {
             if (!item.isFolder()) {
                 def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
-                Map<String, ItemInfo> sha1ToItemMap = new HashMap<String, ItemInfo>()
-                sha1ToItemMap.put(repositories.getFileInfo(item.getRepoPath()).getChecksumsInfo().getSha1(), item)
-                List<File> fileList = new ArrayList<>()
-                String[] includesRepositoryContent = []
-                Set<String> allowedFileExtensions = new HashSet<String>()
-                def repoKey = item.getRepoKey()
-                Collection<AgentProjectInfo> projects = createProjects(sha1ToItemMap, repoKey, fileList, includesRepositoryContent, allowedFileExtensions)
-                WhitesourceService whitesourceService = createWhiteSourceService(config)
-                String userKey = null
-                if (config.containsKey('userKey')) {
-                    userKey = config.userKey
+                def triggerAfterCreate = true
+                if(config.containsKey('triggerAfterCreate')) {
+                    triggerBeforeDownload = config.triggerAfterCreate
                 }
-                CheckPolicyComplianceResult checkPoliciesResult = checkPolicies(whitesourceService, config.apiKey, repoKey, BLANK, projects, false, false, userKey)
-                if (checkPoliciesResult != null) {
-                    String productName = config.productName != null ? config.productName : repository
-                    populateArtifactoryPropertiesTab(projects, config, repoKey, whitesourceService, sha1ToItemMap, checkPoliciesResult, productName, userKey)
-                    log.info("New Item - {$item} was added to the repository")
+                if (triggerAfterCreate) {
+                    Map<String, ItemInfo> sha1ToItemMap = new HashMap<String, ItemInfo>()
+                    sha1ToItemMap.put(repositories.getFileInfo(item.getRepoPath()).getChecksumsInfo().getSha1(), item)
+                    List<File> fileList = new ArrayList<>()
+                    String[] includesRepositoryContent = []
+                    Set<String> allowedFileExtensions = new HashSet<String>()
+                    def repoKey = item.getRepoKey()
+                    Collection<AgentProjectInfo> projects = createProjects(sha1ToItemMap, repoKey, fileList, includesRepositoryContent, allowedFileExtensions)
+                    WhitesourceService whitesourceService = createWhiteSourceService(config)
+                    String userKey = null
+                    if (config.containsKey('userKey')) {
+                        userKey = config.userKey
+                    }
+                    CheckPolicyComplianceResult checkPoliciesResult = checkPolicies(whitesourceService, config.apiKey, repoKey, BLANK, projects, false, false, userKey)
+                    if (checkPoliciesResult != null) {
+                        String productName = config.productName != null ? config.productName : repository
+                        populateArtifactoryPropertiesTab(projects, config, repoKey, whitesourceService, sha1ToItemMap, checkPoliciesResult, productName, userKey)
+                        log.info("New Item - {$item} was added to the repository")
+                    }
                 }
             }
-        } catch (Exception e) {
+        } catch (Exception e ) {
             log.warn("Error creating WhiteSource Service " + e)
         }
     }
@@ -444,6 +457,11 @@ private Collection<AgentProjectInfo> createProjects(Map<String, ItemInfo> sha1To
         dependencies.add(dependencyInfo)
         String compressedFilesFolderName = null
         File compressedFile
+        String [] exclude = [sha1ToItemMap.get(key).getName()]//'' //[currentArchiveFileNameWithPrefix]
+        java.util.Properties properties= new Properties()
+        properties.put('includes', includesRepositoryContent)
+        properties.put('excludes', exclude)
+        FSAConfiguration fsaConfiguration = new FSAConfiguration(properties)
         ResolverConfiguration resolverConfiguration = fsaConfiguration.getResolver()
         // set resolvers to false
         resolverConfiguration.setBowerResolveDependencies(false)
@@ -457,11 +475,6 @@ private Collection<AgentProjectInfo> createProjects(Map<String, ItemInfo> sha1To
             if (compressedFile.getPath().toString().endsWith(archiveName)) {
                 compressedFilesFolderName = compressedFile.getPath()
                 String currentArchiveFileNameWithPrefix = GLOB_PATTERN_PREFIX + sha1ToItemMap.get(key).getName()
-                String [] exclude = [sha1ToItemMap.get(key).getName()]//'' //[currentArchiveFileNameWithPrefix]
-                java.util.Properties properties= new Properties()
-                properties.put('includes', includesRepositoryContent)
-                properties.put('excludes', exclude)
-                FSAConfiguration fsaConfiguration = new FSAConfiguration(properties)
                 Map<String, Set<String>> appPathsToDependencyDirs = new HashMap<>()
                 List<DependencyInfo> dependencyInfos = new FileSystemScanner(resolverConfiguration, fsaConfiguration.getAgent(), false).createProjects(
                         Arrays.asList(compressedFilesFolderName), appPathsToDependencyDirs, false, includesRepositoryContent, exclude, CASE_SENSITIVE_GLOB,
@@ -640,15 +653,17 @@ private void createProjectAndCheckPolicyForDownload(def rpath, def sha1, def rke
                     name = child.getPolicy().getDisplayName()
                 }
             }
-            def status = 403
+            def status = 409
+//            def status = 403
             def message = "${artifactName} did not conform with open source policies :  ${name}"
             log.warn message
-            throw new CancelException(message, status) {
-                public Throwable fillInStackTrace() {
-                    return null
-                }
-
-            }
+            throw new CancelException(message, status)
+//            {
+//                public Throwable fillInStackTrace() {
+////                    return
+//                }
+//
+//            }
         } else {
             def message = "All the epolicies comform with  :  ${artifactName}"
             log.info message
