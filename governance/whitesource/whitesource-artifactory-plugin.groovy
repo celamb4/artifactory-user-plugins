@@ -28,7 +28,9 @@ import org.artifactory.request.*
 import org.artifactory.resource.*
 import org.artifactory.util.*
 import org.artifactory.exception.CancelException
+import org.whitesource.agent.Constants
 import org.whitesource.agent.FileSystemScanner
+import org.whitesource.agent.ProjectConfiguration
 import org.whitesource.agent.api.dispatch.CheckPolicyComplianceResult
 import org.whitesource.agent.api.dispatch.GetDependencyDataResult
 import org.whitesource.agent.api.dispatch.UpdateInventoryResult
@@ -42,6 +44,7 @@ import org.whitesource.agent.client.WhitesourceService
 import org.whitesource.agent.FileSystemScanner
 import org.whitesource.agent.api.model.AgentProjectInfo
 import org.whitesource.agent.api.model.DependencyInfo
+import org.whitesource.fs.FSAConfigProperties
 import org.whitesource.fs.configuration.ConfigurationSerializer
 import org.whitesource.fs.configuration.ResolverConfiguration
 import org.whitesource.fs.configuration.*
@@ -69,8 +72,8 @@ import java.util.Properties
 
 @Field final String PROPERTIES_FILE_PATH = 'plugins/whitesource-artifactory-plugin.properties'
 @Field final String AGENT_TYPE = 'artifactory-plugin'
-@Field final String PLUGIN_VERSION = '18.10.3'
-@Field final String AGENT_VERSION = '2.7.0'
+@Field final String PLUGIN_VERSION = '18.12.1'
+@Field final String AGENT_VERSION = '2.9.1'
 @Field final String OR = '|'
 @Field final int MAX_REPO_SIZE = 10000
 @Field final int MAX_REPO_SIZE_TO_UPLOAD = 2000
@@ -450,6 +453,25 @@ private Collection<AgentProjectInfo> createProjects(Map<String, ItemInfo> sha1To
     projects.add(projectInfo)
     projectInfo.setCoordinates(new Coordinates(null, repoName, BLANK))
     List<DependencyInfo> dependencies = new ArrayList<DependencyInfo>()
+
+    FSAConfigProperties properties= new FSAConfigProperties()
+    properties.put('includes', includesRepositoryContent)
+
+    // set resolvers to false
+    properties.put('bower.resolveDependencies', "false")
+    properties.put('gradle.resolveDependencies', "false")
+    properties.put('maven.resolveDependencies', "false")
+    properties.put('npm.resolveDependencies', "false")
+    properties.put('nuget.resolveDependencies', "false")
+    properties.put('python.resolveDependencies', "false")
+    properties.put('paket.resolveDependencies', "false")
+    properties.put('go.resolveDependencies', "false")
+    properties.put('ruby.resolveDependencies', "false")
+    properties.put('sbt.resolveDependencies', "false")
+    properties.put('php.resolveDependencies', "false")
+    properties.put('html.resolveDependencies', "false")
+    properties.put('cocoapods.resolveDependencies', "false")
+
     for (String key : sha1ToItemMap.keySet()) {
         DependencyInfo dependencyInfo = new DependencyInfo(key)
         String archiveName = sha1ToItemMap.get(key).getName()
@@ -458,28 +480,25 @@ private Collection<AgentProjectInfo> createProjects(Map<String, ItemInfo> sha1To
         String compressedFilesFolderName = null
         File compressedFile
         String [] exclude = [sha1ToItemMap.get(key).getName()]//'' //[currentArchiveFileNameWithPrefix]
-        java.util.Properties properties= new Properties()
-        properties.put('includes', includesRepositoryContent)
         properties.put('excludes', exclude)
+
         FSAConfiguration fsaConfiguration = new FSAConfiguration(properties)
         ResolverConfiguration resolverConfiguration = fsaConfiguration.getResolver()
-        // set resolvers to false
-        resolverConfiguration.setBowerResolveDependencies(false)
-        resolverConfiguration.setGradleResolveDependencies(false)
-        resolverConfiguration.setMavenResolveDependencies(false)
-        resolverConfiguration.setNpmResolveDependencies(false)
-        resolverConfiguration.setNugetResolveDependencies(false)
-        resolverConfiguration.setPythonResolveDependencies(false)
+
         for (int i = 0; i < compressedFilesFolder.size(); i++) {
             compressedFile = compressedFilesFolder.get(i)
             if (compressedFile.getPath().toString().endsWith(archiveName)) {
                 compressedFilesFolderName = compressedFile.getPath()
-                String currentArchiveFileNameWithPrefix = GLOB_PATTERN_PREFIX + sha1ToItemMap.get(key).getName()
                 Map<String, Set<String>> appPathsToDependencyDirs = new HashMap<>()
-                List<DependencyInfo> dependencyInfos = new FileSystemScanner(resolverConfiguration, fsaConfiguration.getAgent(), false).createProjects(
-                        Arrays.asList(compressedFilesFolderName), appPathsToDependencyDirs, false, includesRepositoryContent, exclude, CASE_SENSITIVE_GLOB,
-                        ARCHIVE_EXTRACTION_DEPTH, allowedFileExtensions.toArray(new String[allowedFileExtensions.size()]), new String[0],
-                        false, FOLLOW_SYMLINKS, new ArrayList<>(), PARTIAL_SHA1_MATCH)
+
+                AgentConfiguration agentConfiguration = new AgentConfiguration(includesRepositoryContent, exclude, null, null,
+                        ARCHIVE_EXTRACTION_DEPTH, allowedFileExtensions.toArray(new String[allowedFileExtensions.size()]), null, false,
+                        FOLLOW_SYMLINKS, PARTIAL_SHA1_MATCH, false, false, false, CASE_SENSITIVE_GLOB,
+                        false, new ArrayList<>(), new String[0], new String[0], null, Constants.EMPTY_STRING)
+
+                ProjectConfiguration projectConfiguration = new ProjectConfiguration(agentConfiguration, Arrays.asList(compressedFilesFolderName), appPathsToDependencyDirs, false)
+                List<DependencyInfo> dependencyInfos = new FileSystemScanner(resolverConfiguration, fsaConfiguration.getAgent(), false)
+                        .createProjects(projectConfiguration)
                 dependencyInfo.getChildren().addAll(dependencyInfos)
                 break
             }
