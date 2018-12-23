@@ -162,7 +162,7 @@ jobs {
      * Example :
      * "0 42 9 * * ?"  - Build a trigger that will fire daily at 9:42 am
      */
-    updateRepoWithWhiteSource(cron: "0 07 10 * * ?") {
+    updateRepoWithWhiteSource(cron: "0 50 13 * * ?") {
         try {
             log.info("Starting job updateRepoData By WhiteSource")
             def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
@@ -497,9 +497,11 @@ private Collection<AgentProjectInfo> createProjects(Map<String, ItemInfo> sha1To
                         false, new ArrayList<>(), new String[0], new String[0], null, Constants.EMPTY_STRING)
 
                 ProjectConfiguration projectConfiguration = new ProjectConfiguration(agentConfiguration, Arrays.asList(compressedFilesFolderName), appPathsToDependencyDirs, false)
-                List<DependencyInfo> dependencyInfos = new FileSystemScanner(resolverConfiguration, fsaConfiguration.getAgent(), false)
-                        .createProjects(projectConfiguration)
-                dependencyInfo.getChildren().addAll(dependencyInfos)
+                Collection<AgentProjectInfo> projectInfos = new FileSystemScanner(resolverConfiguration, fsaConfiguration.getAgent(), false)
+                        .createProjects(projectConfiguration).keySet()
+                for (AgentProjectInfo  agentProjectInfo: projectInfos) {
+                    dependencyInfo.getChildren().addAll(agentProjectInfo.getDependencies())
+                }
                 break
             }
         }
