@@ -16,9 +16,11 @@
 
 
 import groovy.transform.Field
+import org.apache.tools.ant.taskdefs.Get
 import org.artifactory.build.*
 import org.artifactory.common.*
 import org.artifactory.exception.*
+import org.artifactory.exception.CancelException
 import org.artifactory.fs.*
 import org.artifactory.fs.ItemInfo
 import org.artifactory.repo.*
@@ -27,36 +29,27 @@ import org.artifactory.repo.RepoPathFactory
 import org.artifactory.request.*
 import org.artifactory.resource.*
 import org.artifactory.util.*
-import org.artifactory.exception.CancelException
-import org.whitesource.agent.Constants
+import org.whitesource.utils.Constants
 import org.whitesource.agent.FileSystemScanner
 import org.whitesource.agent.ProjectConfiguration
+import org.whitesource.agent.api.dispatch.CheckPolicyComplianceRequest
 import org.whitesource.agent.api.dispatch.CheckPolicyComplianceResult
 import org.whitesource.agent.api.dispatch.GetDependencyDataResult
+import org.whitesource.agent.api.dispatch.UpdateInventoryRequest
 import org.whitesource.agent.api.dispatch.UpdateInventoryResult
 import org.whitesource.agent.api.model.*
-import org.whitesource.agent.api.model.AgentProjectInfo
-import org.whitesource.agent.api.model.PolicyCheckResourceNode
-import org.whitesource.agent.api.model.ResourceInfo
-import org.whitesource.agent.api.model.VulnerabilityInfo.*
-import org.whitesource.agent.api.model.VulnerabilityInfo
 import org.whitesource.agent.client.WhitesourceService
-import org.whitesource.agent.FileSystemScanner
-import org.whitesource.agent.api.model.AgentProjectInfo
-import org.whitesource.agent.api.model.DependencyInfo
 import org.whitesource.fs.FSAConfigProperties
-import org.whitesource.fs.configuration.ConfigurationSerializer
+import org.whitesource.fs.FSAConfiguration
+//import org.whitesource.fs.configuration.AgentConfiguration
 import org.whitesource.fs.configuration.ResolverConfiguration
 import org.whitesource.fs.configuration.*
-import org.whitesource.fs.FSAConfiguration
+import org.whitesource.agent.api.dispatch.GetDependencyDataRequest
 
-import javax.ws.rs.core.*
-import javax.ws.rs.core.*
 import java.security.MessageDigest
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
-import java.util.Properties
-
+import java.util.*
 
 @Field final String ACTION = 'WSS-Action'
 @Field final String POLICY_DETAILS = 'WSS-Policy-Details'
@@ -83,6 +76,7 @@ import java.util.Properties
 @Field final String REJECT = 'Reject'
 @Field final String ACCEPT = 'Accept'
 @Field final int DEFAULT_CONNECTION_TIMEOUT_MINUTES = 60
+
 
 // file system scanner
 @Field final boolean CASE_SENSITIVE_GLOB = false
@@ -162,7 +156,7 @@ jobs {
      * Example :
      * "0 42 9 * * ?"  - Build a trigger that will fire daily at 9:42 am
      */
-    updateRepoWithWhiteSource(cron: "0 50 13 * * ?") {
+    updateRepoWithWhiteSource(cron: "0 21 18 * * ?") {
         try {
             log.info("Starting job updateRepoData By WhiteSource")
             def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
@@ -209,15 +203,19 @@ jobs {
                         //updating the WSS service with scanning results
                         UpdateInventoryResult updateResult = null
                         try {
+                            UpdateInventoryRequest updateInventoryRequest = new UpdateInventoryRequest(config.apiKey, projects)
+                            updateInventoryRequest.setUserKey(userKey)
+                            updateInventoryRequest.setProduct(productName)
                             if (config.updateWss) {
                                 if (config.forceUpdate || !config.checkPolicies) {
                                     log.info("Sending Update to WhiteSource for repository : ${repository}")
-                                    updateResult = service.update(config.apiKey, productName, BLANK, projects, userKey)
+                                    updateResult = service.update(updateInventoryRequest)
+//                                    updateResult = service.update(config.apiKey, productName, BLANK, projects, userKey)
                                     logResult(updateResult)
                                 } else if (checkPoliciesResult != null) {
                                     log.info("Sending Update to WhiteSource for repository : ${repository}")
                                     if (!checkPoliciesResult.hasRejections()) {
-                                        updateResult = service.update(config.apiKey, productName, BLANK, projects, userKey)
+                                        updateResult = service.update(updateInventoryRequest)
                                         logResult(updateResult)
                                     }
                                 }
@@ -234,6 +232,7 @@ jobs {
                         break
                     }
                     deleteTemporaryFolders(compressedFilesFolder)
+                    new File(compressedFilesFolder.get(0).getParent()).delete()
                     log.info("Job updateRepoWithWhiteSource has Finished")
                 }
             }
@@ -299,6 +298,7 @@ private void deleteTemporaryFolders(List<File> compressedFilesFolder) {
         File toRemove = compressedFilesFolder.get(i)
         boolean success = deleteNonEmptyDirectory(toRemove)
     }
+
 }
 
 private boolean deleteNonEmptyDirectory(File dir) {
@@ -431,7 +431,9 @@ private void populateArtifactoryPropertiesTab(Collection<AgentProjectInfo> proje
     try {
         int repoSize = sha1ToItemMap.size()
         log.info("Finished updating WhiteSource with ${repoSize} artifacts")
-        GetDependencyDataResult dependencyDataResult = whitesourceService.getDependencyData(config.apiKey, productName, BLANK, projects, userKey)
+        GetDependencyDataRequest dependencyDataRequest = new GetDependencyDataRequest(config.apiKey, productName, BLANK, projects)
+        dependencyDataRequest.setUserKey(userKey)
+        GetDependencyDataResult dependencyDataResult = whitesourceService.getDependencyData(dependencyDataRequest)
         log.info("Updating additional dependency data")
         updateItemsExtraData(dependencyDataResult, sha1ToItemMap)
         log.info("Finished updating additional dependency data")
@@ -490,17 +492,30 @@ private Collection<AgentProjectInfo> createProjects(Map<String, ItemInfo> sha1To
             if (compressedFile.getPath().toString().endsWith(archiveName)) {
                 compressedFilesFolderName = compressedFile.getPath()
                 Map<String, Set<String>> appPathsToDependencyDirs = new HashMap<>()
+//
+//                AgentConfiguration agentConfiguration = new AgentConfiguration(ExtenSsionUtils.INCLUDE, ExtensionUtils.EXCLUDES, new String[0], new String[0], ARCHIVE_EXTRACTION_DEPTH,
+//                        ExtensionUtils.ARCHIVE_INCLUDES, ExtensionUtils.ARCHIVE_EXCLUDES, false,
+//                        FOLLOW_SYMLINKS, PARTIAL_SHA1_MATCH, false, false, false, CASE_SENSITIVE_GLOB, false, new LinkedList<>(),
+//                        new String[0], new String[0], new String[0], "", false);
 
-                AgentConfiguration agentConfiguration = new AgentConfiguration(includesRepositoryContent, exclude, null, null,
-                        ARCHIVE_EXTRACTION_DEPTH, allowedFileExtensions.toArray(new String[allowedFileExtensions.size()]), null, false,
+                String []  extensionsArray = allowedFileExtensions.toArray(new String[allowedFileExtensions.size()])
+
+                AgentConfiguration agentConfiguration = new AgentConfiguration(includesRepositoryContent, exclude, new String[0], new String[0],
+                        ARCHIVE_EXTRACTION_DEPTH, extensionsArray, new String[0],false,
                         FOLLOW_SYMLINKS, PARTIAL_SHA1_MATCH, false, false, false, CASE_SENSITIVE_GLOB,
-                        false, new ArrayList<>(), new String[0], new String[0], null, Constants.EMPTY_STRING)
+                        false,  new LinkedList<String>(), new String[0], new String[0], new String[0], "", false)
 
                 ProjectConfiguration projectConfiguration = new ProjectConfiguration(agentConfiguration, Arrays.asList(compressedFilesFolderName), appPathsToDependencyDirs, false)
                 Collection<AgentProjectInfo> projectInfos = new FileSystemScanner(resolverConfiguration, fsaConfiguration.getAgent(), false)
                         .createProjects(projectConfiguration).keySet()
                 for (AgentProjectInfo  agentProjectInfo: projectInfos) {
                     dependencyInfo.getChildren().addAll(agentProjectInfo.getDependencies())
+                }
+                // delete temp archiveExtractor folder
+                Set<String> foldersToDelete = projectConfiguration.getAppPathsToDependencyDirs().values()
+                for (String folder : foldersToDelete) {
+                    deleteNonEmptyDirectory(new File(folder))
+                    (new File(new File(folder).getParent().substring(1))).delete()
                 }
                 break
             }
@@ -515,7 +530,9 @@ private CheckPolicyComplianceResult checkPolicies(WhitesourceService service, St
     log.info("Checking policies")
     CheckPolicyComplianceResult checkPoliciesResult = null
     try {
-        checkPoliciesResult = service.checkPolicyCompliance(orgToken, product, productVersion, projects, forceCheckAllDependencies, userKey)
+        CheckPolicyComplianceRequest policyComplianceRequest = new CheckPolicyComplianceRequest(orgToken, product, productVersion, projects, forceCheckAllDependencies, userKey,
+                null, null, null)
+        checkPoliciesResult = service.checkPolicyCompliance(policyComplianceRequest)
     } catch (Exception e) {
         log.error(e.getMessage())
         return null
