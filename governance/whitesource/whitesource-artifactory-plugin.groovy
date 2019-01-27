@@ -65,8 +65,8 @@ import java.util.*
 
 @Field final String PROPERTIES_FILE_PATH = 'plugins/whitesource-artifactory-plugin.properties'
 @Field final String AGENT_TYPE = 'artifactory-plugin'
-@Field final String PLUGIN_VERSION = '18.12.1'
-@Field final String AGENT_VERSION = '2.9.1'
+@Field final String PLUGIN_VERSION = '19.1.1'
+@Field final String AGENT_VERSION = '2.9.5'
 @Field final String OR = '|'
 @Field final int MAX_REPO_SIZE = 10000
 @Field final int MAX_REPO_SIZE_TO_UPLOAD = 2000
