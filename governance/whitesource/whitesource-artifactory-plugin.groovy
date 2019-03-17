@@ -65,8 +65,9 @@ import java.util.*
 
 @Field final String PROPERTIES_FILE_PATH = 'plugins/whitesource-artifactory-plugin.properties'
 @Field final String AGENT_TYPE = 'artifactory-plugin'
-@Field final String PLUGIN_VERSION = '19.1.1'
+@Field final String PLUGIN_VERSION = '19.3.1'
 @Field final String AGENT_VERSION = '2.9.5'
+@Field final String ARCHIVE_EXTRACTION_DEPTH = 'archiveExtractionDepth'
 @Field final String OR = '|'
 @Field final int MAX_REPO_SIZE = 10000
 @Field final int MAX_REPO_SIZE_TO_UPLOAD = 2000
@@ -81,9 +82,8 @@ import java.util.*
 // file system scanner
 @Field final boolean CASE_SENSITIVE_GLOB = false
 @Field final boolean FOLLOW_SYMLINKS = false
-@Field final int ARCHIVE_EXTRACTION_DEPTH = 2
+@Field final int ARCHIVE_EXTRACTION_DEPTH_DEFAULT = 2
 @Field final boolean PARTIAL_SHA1_MATCH = false
-
 @Field final String GLOB_PATTERN_PREFIX = '**/*'
 @Field final String PREFIX = '**/*.'
 @Field final String BACK_SLASH = '/'
@@ -113,6 +113,7 @@ download {
     beforeDownloadRequest { request, repoPath ->
         def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
         def triggerBeforeDownload = true
+        def archiveExtractionDepth = config.containsKey(ARCHIVE_EXTRACTION_DEPTH) ? config.get(ARCHIVE_EXTRACTION_DEPTH) : ARCHIVE_EXTRACTION_DEPTH_DEFAULT
         if(config.containsKey('triggerBeforeDownload')) {
             triggerBeforeDownload = config.triggerBeforeDownload
         }
@@ -162,6 +163,7 @@ jobs {
             def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
             CheckPolicyComplianceResult checkPoliciesResult = null
             String[] repositories = config.repoKeys as String[]
+            def archiveExtractionDepth = config.containsKey(ARCHIVE_EXTRACTION_DEPTH) ? config.get(ARCHIVE_EXTRACTION_DEPTH) : ARCHIVE_EXTRACTION_DEPTH_DEFAULT
             Set<String> archiveIncludes = getAllowedFileExtensions(config.archiveIncludes as String[], false)
             Set<String> archiveIncludesWithPrefix = getAllowedFileExtensions(config.archiveIncludes as String[], true)
             String[] includesRepositoryContent = config.getProperty(INCLUDES_REPOSITORY_CONTENT) as String[]
@@ -184,7 +186,8 @@ jobs {
                     log.warn("This repository is empty or not exit : ${repository} , Job Exiting")
                 } else {
                     // create project and WhiteSource service
-                    Collection<AgentProjectInfo> projects = createProjects(sha1ToItemMap, repository, compressedFilesFolder, includesRepositoryContent, archiveIncludesWithPrefix)
+                    Collection<AgentProjectInfo> projects = createProjects(sha1ToItemMap, repository, compressedFilesFolder, includesRepositoryContent,
+                            archiveIncludesWithPrefix, archiveExtractionDepth)
                     WhitesourceService service = createWhiteSourceService(config)
                     // update WhiteSource with repositories
                     String userKey = null
@@ -255,6 +258,7 @@ storage {
             if (!item.isFolder()) {
                 def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
                 def triggerAfterCreate = true
+                def archiveExtractionDepth = config.containsKey(ARCHIVE_EXTRACTION_DEPTH) ? config.get(ARCHIVE_EXTRACTION_DEPTH) : ARCHIVE_EXTRACTION_DEPTH_DEFAULT
                 if(config.containsKey('triggerAfterCreate')) {
                     triggerBeforeDownload = config.triggerAfterCreate
                 }
@@ -265,7 +269,7 @@ storage {
                     String[] includesRepositoryContent = []
                     Set<String> allowedFileExtensions = new HashSet<String>()
                     def repoKey = item.getRepoKey()
-                    Collection<AgentProjectInfo> projects = createProjects(sha1ToItemMap, repoKey, fileList, includesRepositoryContent, allowedFileExtensions)
+                    Collection<AgentProjectInfo> projects = createProjects(sha1ToItemMap, repoKey, fileList, includesRepositoryContent, allowedFileExtensions, archiveExtractionDepth)
                     WhitesourceService whitesourceService = createWhiteSourceService(config)
                     String userKey = null
                     if (config.containsKey('userKey')) {
@@ -449,7 +453,7 @@ private void populateArtifactoryPropertiesTab(Collection<AgentProjectInfo> proje
 }
 
 private Collection<AgentProjectInfo> createProjects(Map<String, ItemInfo> sha1ToItemMap, String repoName, List<File> compressedFilesFolder,
-                                                    String[] includesRepositoryContent, Set<String> allowedFileExtensions) {
+                                                    String[] includesRepositoryContent, Set<String> allowedFileExtensions, String archiveExtractionDepth) {
     Collection<AgentProjectInfo> projects = new ArrayList<AgentProjectInfo>()
     AgentProjectInfo projectInfo = new AgentProjectInfo()
     projects.add(projectInfo)
@@ -492,16 +496,9 @@ private Collection<AgentProjectInfo> createProjects(Map<String, ItemInfo> sha1To
             if (compressedFile.getPath().toString().endsWith(archiveName)) {
                 compressedFilesFolderName = compressedFile.getPath()
                 Map<String, Set<String>> appPathsToDependencyDirs = new HashMap<>()
-//
-//                AgentConfiguration agentConfiguration = new AgentConfiguration(ExtenSsionUtils.INCLUDE, ExtensionUtils.EXCLUDES, new String[0], new String[0], ARCHIVE_EXTRACTION_DEPTH,
-//                        ExtensionUtils.ARCHIVE_INCLUDES, ExtensionUtils.ARCHIVE_EXCLUDES, false,
-//                        FOLLOW_SYMLINKS, PARTIAL_SHA1_MATCH, false, false, false, CASE_SENSITIVE_GLOB, false, new LinkedList<>(),
-//                        new String[0], new String[0], new String[0], "", false);
-
                 String []  extensionsArray = allowedFileExtensions.toArray(new String[allowedFileExtensions.size()])
-
                 AgentConfiguration agentConfiguration = new AgentConfiguration(includesRepositoryContent, exclude, new String[0], new String[0],
-                        ARCHIVE_EXTRACTION_DEPTH, extensionsArray, new String[0],false,
+                        archiveExtractionDepth, extensionsArray, new String[0],false,
                         FOLLOW_SYMLINKS, PARTIAL_SHA1_MATCH, false, false, false, CASE_SENSITIVE_GLOB,
                         false,  new LinkedList<String>(), new String[0], new String[0], new String[0], "", false)
 
