@@ -83,6 +83,8 @@ import java.util.*
 @Field final boolean CASE_SENSITIVE_GLOB = false
 @Field final boolean FOLLOW_SYMLINKS = false
 @Field final int ARCHIVE_EXTRACTION_DEPTH_DEFAULT = 2
+@Field final int ARCHIVE_EXTRACTION_DEPTH_MIN = 1
+@Field final int ARCHIVE_EXTRACTION_DEPTH_MAX = 7
 @Field final boolean PARTIAL_SHA1_MATCH = false
 @Field final String GLOB_PATTERN_PREFIX = '**/*'
 @Field final String PREFIX = '**/*.'
@@ -164,6 +166,8 @@ jobs {
             CheckPolicyComplianceResult checkPoliciesResult = null
             String[] repositories = config.repoKeys as String[]
             def archiveExtractionDepth = config.containsKey(ARCHIVE_EXTRACTION_DEPTH) ? config.get(ARCHIVE_EXTRACTION_DEPTH) : ARCHIVE_EXTRACTION_DEPTH_DEFAULT
+            archiveExtractionDepth = verifyArchiveExtractionDepth(archiveExtractionDepth)
+
             Set<String> archiveIncludes = getAllowedFileExtensions(config.archiveIncludes as String[], false)
             Set<String> archiveIncludesWithPrefix = getAllowedFileExtensions(config.archiveIncludes as String[], true)
             String[] includesRepositoryContent = config.getProperty(INCLUDES_REPOSITORY_CONTENT) as String[]
@@ -186,8 +190,9 @@ jobs {
                     log.warn("This repository is empty or not exit : ${repository} , Job Exiting")
                 } else {
                     // create project and WhiteSource service
+                    // Add 1 to archive extraction depth since we add files to compressed file
                     Collection<AgentProjectInfo> projects = createProjects(sha1ToItemMap, repository, compressedFilesFolder, includesRepositoryContent,
-                            archiveIncludesWithPrefix, archiveExtractionDepth)
+                            archiveIncludesWithPrefix, archiveExtractionDepth + 1)
                     WhitesourceService service = createWhiteSourceService(config)
                     // update WhiteSource with repositories
                     String userKey = null
@@ -259,6 +264,8 @@ storage {
                 def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
                 def triggerAfterCreate = true
                 def archiveExtractionDepth = config.containsKey(ARCHIVE_EXTRACTION_DEPTH) ? config.get(ARCHIVE_EXTRACTION_DEPTH) : ARCHIVE_EXTRACTION_DEPTH_DEFAULT
+                archiveExtractionDepth = verifyArchiveExtractionDepth(archiveExtractionDepth)
+
                 if(config.containsKey('triggerAfterCreate')) {
                     triggerBeforeDownload = config.triggerAfterCreate
                 }
@@ -453,7 +460,7 @@ private void populateArtifactoryPropertiesTab(Collection<AgentProjectInfo> proje
 }
 
 private Collection<AgentProjectInfo> createProjects(Map<String, ItemInfo> sha1ToItemMap, String repoName, List<File> compressedFilesFolder,
-                                                    String[] includesRepositoryContent, Set<String> allowedFileExtensions, String archiveExtractionDepth) {
+                                                    String[] includesRepositoryContent, Set<String> allowedFileExtensions, int archiveExtractionDepth) {
     Collection<AgentProjectInfo> projects = new ArrayList<AgentProjectInfo>()
     AgentProjectInfo projectInfo = new AgentProjectInfo()
     projects.add(projectInfo)
@@ -782,4 +789,15 @@ private void getRelevantItemSha1(def repository, def fileName, List<ItemInfo> it
         }
     }
     return
+}
+
+private int verifyArchiveExtractionDepth(int archiveExtractionDepth) {
+    if(archiveExtractionDepth < ARCHIVE_EXTRACTION_DEPTH_MIN) {
+        archiveExtractionDepth = ARCHIVE_EXTRACTION_DEPTH_MIN
+        log.warn("Minimum archive extraction depth is ${ARCHIVE_EXTRACTION_DEPTH_MIN}, Archive extraction depth was set up to minimum value.")
+    } else if(archiveExtractionDepth > ARCHIVE_EXTRACTION_DEPTH_MAX) {
+        archiveExtractionDepth = ARCHIVE_EXTRACTION_DEPTH_MAX
+        log.warn("Maximum archive extraction depth is ${ARCHIVE_EXTRACTION_DEPTH_MAX}, Archive extraction depth was set up to maximum value.")
+    }
+    return archiveExtractionDepth
 }
