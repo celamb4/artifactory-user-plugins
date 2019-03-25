@@ -78,7 +78,6 @@ import java.util.*
 @Field final String ACCEPT = 'Accept'
 @Field final int DEFAULT_CONNECTION_TIMEOUT_MINUTES = 60
 
-
 // file system scanner
 @Field final boolean CASE_SENSITIVE_GLOB = false
 @Field final boolean FOLLOW_SYMLINKS = false
@@ -116,7 +115,7 @@ download {
         def config = new ConfigSlurper().parse(new File(ctx.artifactoryHome.haAwareEtcDir, PROPERTIES_FILE_PATH).toURL())
         def triggerBeforeDownload = true
         def archiveExtractionDepth = config.containsKey(ARCHIVE_EXTRACTION_DEPTH) ? config.get(ARCHIVE_EXTRACTION_DEPTH) : ARCHIVE_EXTRACTION_DEPTH_DEFAULT
-        if(config.containsKey('triggerBeforeDownload')) {
+        if (config.containsKey('triggerBeforeDownload')) {
             triggerBeforeDownload = config.triggerBeforeDownload
         }
         if (triggerBeforeDownload) {
@@ -171,7 +170,7 @@ jobs {
             Set<String> archiveIncludes = getAllowedFileExtensions(config.archiveIncludes as String[], false)
             Set<String> archiveIncludesWithPrefix = getAllowedFileExtensions(config.archiveIncludes as String[], true)
             String[] includesRepositoryContent = config.getProperty(INCLUDES_REPOSITORY_CONTENT) as String[]
-            if (includesRepositoryContent.size() == 0){
+            if (includesRepositoryContent.size() == 0) {
                 includesRepositoryContent = buildDefaults()
             }
             includesRepositoryContent = addPrefix(includesRepositoryContent)
@@ -200,7 +199,7 @@ jobs {
                         userKey = config.userKey
                     }
                     if (config.checkPolicies) {
-                        checkPoliciesResult = checkPolicies(service, config.apiKey, productName, BLANK, projects, config.forceCheckAllDependencies ,config.forceUpdate, userKey)
+                        checkPoliciesResult = checkPolicies(service, config.apiKey, productName, BLANK, projects, config.forceCheckAllDependencies, config.forceUpdate, userKey)
                         if (checkPoliciesResult == null) {
                             break
                         }
@@ -239,11 +238,10 @@ jobs {
                         log.error(e.getMessage())
                         break
                     }
-                    deleteTemporaryFolders(compressedFilesFolder)
-                    new File(compressedFilesFolder.get(0).getParent()).delete()
-                    log.info("Job updateRepoWithWhiteSource has Finished")
                 }
+                deleteTemporaryFolders(compressedFilesFolder)
             }
+            log.info("Job updateRepoWithWhiteSource has Finished")
         } catch (Exception e) {
             log.warn("Error while running the plugin: ", e.getMessage())
         }
@@ -266,7 +264,7 @@ storage {
                 def archiveExtractionDepth = config.containsKey(ARCHIVE_EXTRACTION_DEPTH) ? config.get(ARCHIVE_EXTRACTION_DEPTH) : ARCHIVE_EXTRACTION_DEPTH_DEFAULT
                 archiveExtractionDepth = verifyArchiveExtractionDepth(archiveExtractionDepth)
 
-                if(config.containsKey('triggerAfterCreate')) {
+                if (config.containsKey('triggerAfterCreate')) {
                     triggerBeforeDownload = config.triggerAfterCreate
                 }
                 if (triggerAfterCreate) {
@@ -290,26 +288,33 @@ storage {
                     }
                 }
             }
-        } catch (Exception e ) {
+        } catch (Exception e) {
             log.warn("Error creating WhiteSource Service " + e)
         }
     }
 }
 
-
 /* --- Private Methods --- */
 
 private void deleteTemporaryFolders(List<File> compressedFilesFolder) {
-    File fileExtractorTempFolder = new File(TEMP_DOWNLOAD_DIRECTORY + File.separator + "WhiteSource-ArchiveExtractor")
-    if (fileExtractorTempFolder.exists()) {
-        //the temp folder used by the WSS file agent is present.
-        boolean success = deleteNonEmptyDirectory(fileExtractorTempFolder)
-    }
-    for (int i = 0; i < compressedFilesFolder.size(); i++) {
-        File toRemove = compressedFilesFolder.get(i)
-        boolean success = deleteNonEmptyDirectory(toRemove)
-    }
+    try {
+        File fileExtractorTempFolder = new File(TEMP_DOWNLOAD_DIRECTORY + File.separator + "WhiteSource-ArchiveExtractor")
+        if (fileExtractorTempFolder.exists()) {
+            //the temp folder used by the WSS file agent is present.
+            deleteNonEmptyDirectory(fileExtractorTempFolder)
+        }
 
+        // Deleting compressed file and parent folder
+        if (compressedFilesFolder != null && compressedFilesFolder.size() > 0) {
+            for (int i = 0; i < compressedFilesFolder.size(); i++) {
+                File toRemove = compressedFilesFolder.get(i)
+                deleteNonEmptyDirectory(toRemove)
+            }
+            new File(compressedFilesFolder.get(0).getParent()).delete()
+        }
+    } catch (Exception e) {
+        log.warn("Error during deleting of whitesource temporary files " + e)
+    }
 }
 
 private boolean deleteNonEmptyDirectory(File dir) {
@@ -325,9 +330,9 @@ private boolean deleteNonEmptyDirectory(File dir) {
     return dir.delete()
 }
 
-private Set<String> getAllowedFileExtensions(String [] allowedFileExtensionsFromConfigFile, boolean withPrefix) {
+private Set<String> getAllowedFileExtensions(String[] allowedFileExtensionsFromConfigFile, boolean withPrefix) {
     Set<String> allowedFileExtensions = new HashSet<String>()
-    for (String key: allowedFileExtensionsFromConfigFile) {
+    for (String key : allowedFileExtensionsFromConfigFile) {
         if (withPrefix) {
             key = PREFIX + key
         }
@@ -358,7 +363,7 @@ private Set<String> getAllowedFileExtensions(String [] allowedFileExtensionsFrom
     return allowedFileExtensions
 }
 
-private void handleCheckPoliciesResults(Map<String, PolicyCheckResourceNode> projects, Map<String, ItemInfo> sha1ToItemMap){
+private void handleCheckPoliciesResults(Map<String, PolicyCheckResourceNode> projects, Map<String, ItemInfo> sha1ToItemMap) {
     for (String key : projects.keySet()) {
         PolicyCheckResourceNode policyCheckResourceNode = projects.get(key)
         Collection<PolicyCheckResourceNode> children = policyCheckResourceNode.getChildren()
@@ -375,7 +380,7 @@ private void handleCheckPoliciesResults(Map<String, PolicyCheckResourceNode> pro
     }
 }
 
-private updateItemsExtraData(GetDependencyDataResult dependencyDataResult, Map<String, ItemInfo> sha1ToItemMap){
+private updateItemsExtraData(GetDependencyDataResult dependencyDataResult, Map<String, ItemInfo> sha1ToItemMap) {
     for (ResourceInfo resource : dependencyDataResult.getResources()) {
         ItemInfo item = sha1ToItemMap.get(resource.getSha1())
         if (item != null) {
@@ -411,7 +416,7 @@ private updateItemsExtraData(GetDependencyDataResult dependencyDataResult, Map<S
 
 private void findAllRepoItems(
         def repoPath, Map<String, ItemInfo> sha1ToItemMap, List<ItemInfo> list, Set<String> allowedFileExtensions = null) {
-    if (allowedFileExtensions == null || allowedFileExtensions.size() == 0 ) {
+    if (allowedFileExtensions == null || allowedFileExtensions.size() == 0) {
         log.error("No file extensions list was provided.")
         return
     }
@@ -422,7 +427,7 @@ private void findAllRepoItems(
             String endsWith = item.getName()
             int index = endsWith.lastIndexOf(".")
             sha1ToItemMap.put(repositories.getFileInfo(item.getRepoPath()).getChecksumsInfo().getSha1(), item)
-            if ( item.getName().lastIndexOf(".") > -1) {
+            if (item.getName().lastIndexOf(".") > -1) {
                 endsWith = endsWith.substring(index + 1)
                 if (allowedFileExtensions.contains(endsWith)) {
                     list.add(item.getRepoPath())
@@ -467,7 +472,7 @@ private Collection<AgentProjectInfo> createProjects(Map<String, ItemInfo> sha1To
     projectInfo.setCoordinates(new Coordinates(null, repoName, BLANK))
     List<DependencyInfo> dependencies = new ArrayList<DependencyInfo>()
 
-    FSAConfigProperties properties= new FSAConfigProperties()
+    FSAConfigProperties properties = new FSAConfigProperties()
     properties.put('includes', includesRepositoryContent)
 
     // set resolvers to false
@@ -492,7 +497,7 @@ private Collection<AgentProjectInfo> createProjects(Map<String, ItemInfo> sha1To
         dependencies.add(dependencyInfo)
         String compressedFilesFolderName = null
         File compressedFile
-        String [] exclude = [sha1ToItemMap.get(key).getName()]//'' //[currentArchiveFileNameWithPrefix]
+        String[] exclude = [sha1ToItemMap.get(key).getName()]//'' //[currentArchiveFileNameWithPrefix]
         properties.put('excludes', exclude)
 
         FSAConfiguration fsaConfiguration = new FSAConfiguration(properties)
@@ -503,16 +508,16 @@ private Collection<AgentProjectInfo> createProjects(Map<String, ItemInfo> sha1To
             if (compressedFile.getPath().toString().endsWith(archiveName)) {
                 compressedFilesFolderName = compressedFile.getPath()
                 Map<String, Set<String>> appPathsToDependencyDirs = new HashMap<>()
-                String []  extensionsArray = allowedFileExtensions.toArray(new String[allowedFileExtensions.size()])
+                String[] extensionsArray = allowedFileExtensions.toArray(new String[allowedFileExtensions.size()])
                 AgentConfiguration agentConfiguration = new AgentConfiguration(includesRepositoryContent, exclude, new String[0], new String[0],
-                        archiveExtractionDepth, extensionsArray, new String[0],false,
+                        archiveExtractionDepth, extensionsArray, new String[0], false,
                         FOLLOW_SYMLINKS, PARTIAL_SHA1_MATCH, false, false, false, CASE_SENSITIVE_GLOB,
-                        false,  new LinkedList<String>(), new String[0], new String[0], new String[0], "", false)
+                        false, new LinkedList<String>(), new String[0], new String[0], new String[0], "", false)
 
                 ProjectConfiguration projectConfiguration = new ProjectConfiguration(agentConfiguration, Arrays.asList(compressedFilesFolderName), appPathsToDependencyDirs, false)
                 Collection<AgentProjectInfo> projectInfos = new FileSystemScanner(resolverConfiguration, fsaConfiguration.getAgent(), false)
                         .createProjects(projectConfiguration).keySet()
-                for (AgentProjectInfo  agentProjectInfo: projectInfos) {
+                for (AgentProjectInfo agentProjectInfo : projectInfos) {
                     dependencyInfo.getChildren().addAll(agentProjectInfo.getDependencies())
                 }
                 // delete temp archiveExtractor folder
@@ -530,7 +535,7 @@ private Collection<AgentProjectInfo> createProjects(Map<String, ItemInfo> sha1To
 }
 
 private CheckPolicyComplianceResult checkPolicies(WhitesourceService service, String orgToken, String product, String productVersion,
-                                                  Collection<AgentProjectInfo> projects, boolean forceCheckAllDependencies, boolean  forceUpdate, String userKey) {
+                                                  Collection<AgentProjectInfo> projects, boolean forceCheckAllDependencies, boolean forceUpdate, String userKey) {
     log.info("Checking policies")
     CheckPolicyComplianceResult checkPoliciesResult = null
     try {
@@ -622,9 +627,10 @@ private List<File> compressOneRepositoryArchiveIntoOneZip(List list, String repo
     File archiveFile = null
     FileOutputStream fileOutputStream
     ZipOutputStream zipOutputStream
-    for (int i =0; i < list.size() ; i++) {
+    for (int i = 0; i < list.size(); i++) {
         def artifactName = list.get(i).getPath().substring(list.get(i).getPath().lastIndexOf(BACK_SLASH) + 1)
-        File destDir = new File(TEMP_DOWNLOAD_DIRECTORY + File.separator + repository + System.nanoTime() + File.separator + artifactName)//+ list.get(i).getPath())
+        File destDir = new File(TEMP_DOWNLOAD_DIRECTORY + File.separator + repository + System.nanoTime() + File.separator + artifactName)
+//+ list.get(i).getPath())
         if (!destDir.exists()) {
             destDir.mkdirs()
         }
@@ -651,8 +657,8 @@ private List<File> compressOneRepositoryArchiveIntoOneZip(List list, String repo
     return listOfArchiveFiles
 }
 
-private String [] buildDefaults(){
-    String [] defaultArray = [
+private String[] buildDefaults() {
+    String[] defaultArray = [
             "as", "asp", "aspx", "c", "h", "s", "cc", "cp", "cpp", "cxx", "c++", "hpp", "hxx", "h++", "hh", "mm", "c#", "cs",
             "csharp", "go", "goc", "html", "m", "pch", "java", "js", "jsp", "pl", "plx", "pm", "ph", "cgi", "fcgi", "psgi",
             "al", "perl", "t", "p6m", "p6l", "nqp", "6pl", "6pm", "p6", "php", "py", "rb", "swift", "clj", "cljc", "cljs",
@@ -661,9 +667,9 @@ private String [] buildDefaults(){
     return defaultArray
 }
 
-private String[] addPrefix(String[] values){
-    String[] updated = new String [values.size()]
-    for (int i=0; i<values.size(); i++){
+private String[] addPrefix(String[] values) {
+    String[] updated = new String[values.size()]
+    for (int i = 0; i < values.size(); i++) {
         updated[i] = PREFIX + values[i]
     }
     return updated
@@ -726,8 +732,8 @@ private Collection<AgentProjectInfo> createProjectWithOneDependency(String sha1,
     return projects
 }
 
-private String getRemoteRepoFileSha1(def conf, def rpath){
-    def url =conf.url
+private String getRemoteRepoFileSha1(def conf, def rpath) {
+    def url = conf.url
     if (!url.endsWith('/')) url += '/'
     url += rpath
     // get the remote authorization data
@@ -792,10 +798,10 @@ private void getRelevantItemSha1(def repository, def fileName, List<ItemInfo> it
 }
 
 private int verifyArchiveExtractionDepth(int archiveExtractionDepth) {
-    if(archiveExtractionDepth < ARCHIVE_EXTRACTION_DEPTH_MIN) {
+    if (archiveExtractionDepth < ARCHIVE_EXTRACTION_DEPTH_MIN) {
         archiveExtractionDepth = ARCHIVE_EXTRACTION_DEPTH_MIN
         log.warn("Minimum archive extraction depth is ${ARCHIVE_EXTRACTION_DEPTH_MIN}, Archive extraction depth was set up to minimum value.")
-    } else if(archiveExtractionDepth > ARCHIVE_EXTRACTION_DEPTH_MAX) {
+    } else if (archiveExtractionDepth > ARCHIVE_EXTRACTION_DEPTH_MAX) {
         archiveExtractionDepth = ARCHIVE_EXTRACTION_DEPTH_MAX
         log.warn("Maximum archive extraction depth is ${ARCHIVE_EXTRACTION_DEPTH_MAX}, Archive extraction depth was set up to maximum value.")
     }
