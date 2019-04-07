@@ -65,7 +65,7 @@ import java.util.*
 
 @Field final String PROPERTIES_FILE_PATH = 'plugins/whitesource-artifactory-plugin.properties'
 @Field final String AGENT_TYPE = 'artifactory-plugin'
-@Field final String PLUGIN_VERSION = '19.3.1'
+@Field final String PLUGIN_VERSION = '19.3.2'
 @Field final String AGENT_VERSION = '2.9.5'
 @Field final String ARCHIVE_EXTRACTION_DEPTH = 'archiveExtractionDepth'
 @Field final String OR = '|'
