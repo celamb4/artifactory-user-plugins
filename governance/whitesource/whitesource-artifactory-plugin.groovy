@@ -41,6 +41,7 @@ import org.whitesource.agent.api.model.*
 import org.whitesource.agent.client.WhitesourceService
 import org.whitesource.fs.FSAConfigProperties
 import org.whitesource.fs.FSAConfiguration
+
 //import org.whitesource.fs.configuration.AgentConfiguration
 import org.whitesource.fs.configuration.ResolverConfiguration
 import org.whitesource.fs.configuration.*
@@ -124,7 +125,7 @@ download {
             // get the url of the remote repo
             def repositoryConf = repositories.getRepositoryConfiguration(rkey)
             def type = repositoryConf.type
-            String sha1 = null
+            String sha1
             try {
                 if (REMOTE.equals(type)) {
                     // get remote repo artifact sha1
@@ -176,10 +177,12 @@ jobs {
             includesRepositoryContent = addPrefix(includesRepositoryContent)
             for (String repository : repositories) {
                 String productName = config.containsKey('productName') ? config.productName : repository
-                Map<String, ItemInfo> sha1ToItemMap = new HashMap<String, ItemInfo>()
+                Map<String, WssItemInfo> sha1ToItemMap = new HashMap<String, WssItemInfo>()
                 List<ItemInfo> list = new ArrayList<>()
                 findAllRepoItems(RepoPathFactory.create(repository), sha1ToItemMap, list, archiveIncludes)
                 def compressedFilesFolder = compressOneRepositoryArchiveIntoOneZip(list, repository)
+                list.clear() // clear list - it's not used after this step
+
                 int repoSize = sha1ToItemMap.size()
                 int maxRepoScanSize = config.containsKey('maxRepoScanSize') ? config.maxRepoScanSize > 0 ? config.maxRepoScanSize : MAX_REPO_SIZE : MAX_REPO_SIZE
                 int maxRepoUploadWssSize = config.containsKey('maxRepoUploadWssSize') ? config.maxRepoUploadWssSize > 0 ? config.maxRepoUploadWssSize : MAX_REPO_SIZE_TO_UPLOAD : MAX_REPO_SIZE_TO_UPLOAD
@@ -268,8 +271,8 @@ storage {
                     triggerBeforeDownload = config.triggerAfterCreate
                 }
                 if (triggerAfterCreate) {
-                    Map<String, ItemInfo> sha1ToItemMap = new HashMap<String, ItemInfo>()
-                    sha1ToItemMap.put(repositories.getFileInfo(item.getRepoPath()).getChecksumsInfo().getSha1(), item)
+                    Map<String, WssItemInfo> sha1ToItemMap = new HashMap<String, WssItemInfo>()
+                    sha1ToItemMap.put(repositories.getFileInfo(item.getRepoPath()).getChecksumsInfo().getSha1(), new WssItemInfo(item.getName(), item.getRepoPath()))
                     List<File> fileList = new ArrayList<>()
                     String[] includesRepositoryContent = []
                     Set<String> allowedFileExtensions = new HashSet<String>()
@@ -363,14 +366,14 @@ private Set<String> getAllowedFileExtensions(String[] allowedFileExtensionsFromC
     return allowedFileExtensions
 }
 
-private void handleCheckPoliciesResults(Map<String, PolicyCheckResourceNode> projects, Map<String, ItemInfo> sha1ToItemMap) {
+private void handleCheckPoliciesResults(Map<String, PolicyCheckResourceNode> projects, Map<String, WssItemInfo> sha1ToItemMap) {
     for (String key : projects.keySet()) {
         PolicyCheckResourceNode policyCheckResourceNode = projects.get(key)
         Collection<PolicyCheckResourceNode> children = policyCheckResourceNode.getChildren()
         for (PolicyCheckResourceNode child : children) {
-            ItemInfo item = sha1ToItemMap.get(child.getResource().getSha1())
-            if (item != null && child.getPolicy() != null) {
-                def path = item.getRepoPath()
+            WssItemInfo wssItemInfo = sha1ToItemMap.get(child.getResource().getSha1())
+            if (wssItemInfo != null && child.getPolicy() != null) {
+                def path = wssItemInfo.getRepoPath()
                 if (REJECT.equals(child.getPolicy().getActionType()) || ACCEPT.equals(child.getPolicy().getActionType())) {
                     repositories.setProperty(path, ACTION, child.getPolicy().getActionType())
                     repositories.setProperty(path, POLICY_DETAILS, child.getPolicy().getDisplayName())
@@ -380,11 +383,11 @@ private void handleCheckPoliciesResults(Map<String, PolicyCheckResourceNode> pro
     }
 }
 
-private updateItemsExtraData(GetDependencyDataResult dependencyDataResult, Map<String, ItemInfo> sha1ToItemMap) {
+private updateItemsExtraData(GetDependencyDataResult dependencyDataResult, Map<String, WssItemInfo> sha1ToItemMap) {
     for (ResourceInfo resource : dependencyDataResult.getResources()) {
-        ItemInfo item = sha1ToItemMap.get(resource.getSha1())
-        if (item != null) {
-            RepoPath repoPath = item.getRepoPath()
+        WssItemInfo wssItemInfo = sha1ToItemMap.get(resource.getSha1())
+        if (wssItemInfo != null) {
+            RepoPath repoPath = wssItemInfo.getRepoPath()
             if (!BLANK.equals(resource.getDescription())) {
                 repositories.setProperty(repoPath, DESCRIPTION, resource.getDescription())
             }
@@ -415,7 +418,7 @@ private updateItemsExtraData(GetDependencyDataResult dependencyDataResult, Map<S
 }
 
 private void findAllRepoItems(
-        def repoPath, Map<String, ItemInfo> sha1ToItemMap, List<ItemInfo> list, Set<String> allowedFileExtensions = null) {
+        def repoPath, Map<String, WssItemInfo> sha1ToItemMap, List<ItemInfo> list, Set<String> allowedFileExtensions = null) {
     if (allowedFileExtensions == null || allowedFileExtensions.size() == 0) {
         log.error("No file extensions list was provided.")
         return
@@ -426,7 +429,7 @@ private void findAllRepoItems(
         } else {
             String endsWith = item.getName()
             int index = endsWith.lastIndexOf(".")
-            sha1ToItemMap.put(repositories.getFileInfo(item.getRepoPath()).getChecksumsInfo().getSha1(), item)
+            sha1ToItemMap.put(repositories.getFileInfo(item.getRepoPath()).getChecksumsInfo().getSha1(), new WssItemInfo(item.getName(), item.getRepoPath()))
             if (item.getName().lastIndexOf(".") > -1) {
                 endsWith = endsWith.substring(index + 1)
                 if (allowedFileExtensions.contains(endsWith)) {
@@ -441,7 +444,7 @@ private void findAllRepoItems(
 }
 
 private void populateArtifactoryPropertiesTab(Collection<AgentProjectInfo> projects, def config, String repoName,
-                                              WhitesourceService whitesourceService, Map<String, ItemInfo> sha1ToItemMap,
+                                              WhitesourceService whitesourceService, Map<String, WssItemInfo> sha1ToItemMap,
                                               CheckPolicyComplianceResult checkPoliciesResult, String productName, String userKey) {
     // get policies and dependency data result and update properties tab for each artifact
     try {
@@ -464,7 +467,7 @@ private void populateArtifactoryPropertiesTab(Collection<AgentProjectInfo> proje
     }
 }
 
-private Collection<AgentProjectInfo> createProjects(Map<String, ItemInfo> sha1ToItemMap, String repoName, List<File> compressedFilesFolder,
+private Collection<AgentProjectInfo> createProjects(Map<String, WssItemInfo> sha1ToItemMap, String repoName, List<File> compressedFilesFolder,
                                                     String[] includesRepositoryContent, Set<String> allowedFileExtensions, int archiveExtractionDepth) {
     Collection<AgentProjectInfo> projects = new ArrayList<AgentProjectInfo>()
     AgentProjectInfo projectInfo = new AgentProjectInfo()
@@ -624,33 +627,48 @@ private void logResult(UpdateInventoryResult updateResult) {
 private List<File> compressOneRepositoryArchiveIntoOneZip(List list, String repository) throws IOException {
     byte[] data = new byte[2048]
     List<File> listOfArchiveFiles = new ArrayList<>()
-    File archiveFile = null
+    File archiveFile
+    InputStream inputStream
     FileOutputStream fileOutputStream
     ZipOutputStream zipOutputStream
+    ZipEntry ze
     for (int i = 0; i < list.size(); i++) {
         def artifactName = list.get(i).getPath().substring(list.get(i).getPath().lastIndexOf(BACK_SLASH) + 1)
         File destDir = new File(TEMP_DOWNLOAD_DIRECTORY + File.separator + repository + System.nanoTime() + File.separator + artifactName)
-//+ list.get(i).getPath())
+        //+ list.get(i).getPath())
         if (!destDir.exists()) {
             destDir.mkdirs()
         }
+
         archiveFile = new File(destDir.getPath() + File.separator + artifactName)  //list.get(i).getPath())
-        fileOutputStream = new FileOutputStream(archiveFile)
-        zipOutputStream = new ZipOutputStream(fileOutputStream)
-        ZipEntry ze = new ZipEntry(list.get(i).getPath())
-        zipOutputStream.putNextEntry(ze)
-        InputStream inputStream
+
         try {
+            fileOutputStream = new FileOutputStream(archiveFile)
+            zipOutputStream = new ZipOutputStream(fileOutputStream)
+            ze = new ZipEntry(list.get(i).getPath())
+            zipOutputStream.putNextEntry(ze)
             inputStream = repositories.getContent(list.get(i)).getInputStream()
             int len
             while ((len = inputStream.read(data)) > 0) {
                 zipOutputStream.write(data, 0, len)
             }
         } finally {
-            inputStream.close()
-            zipOutputStream.closeEntry()
-            zipOutputStream.close()
-            fileOutputStream.close()
+            if (inputStream != null) {
+                try {
+                    inputStream.close()
+                } catch (Exception e) {}
+            }
+            if (zipOutputStream != null) {
+                try {
+                    zipOutputStream.closeEntry()
+                    zipOutputStream.close()
+                } catch (Exception e) {}
+            }
+            if (fileOutputStream != null) {
+                try{
+                    fileOutputStream.close()
+                } catch (Exception e) {}
+            }
         }
         listOfArchiveFiles.add(destDir)
     }
@@ -806,4 +824,22 @@ private int verifyArchiveExtractionDepth(int archiveExtractionDepth) {
         log.warn("Maximum archive extraction depth is ${ARCHIVE_EXTRACTION_DEPTH_MAX}, Archive extraction depth was set up to maximum value.")
     }
     return archiveExtractionDepth
+}
+
+class WssItemInfo {
+    String name
+    RepoPath repoPath
+
+    WssItemInfo(name, repoPath) {
+        this.name = name
+        this.repoPath = repoPath
+    }
+
+    String getName() {
+        return this.name
+    }
+
+    RepoPath getRepoPath() {
+        return this.repoPath
+    }
 }
