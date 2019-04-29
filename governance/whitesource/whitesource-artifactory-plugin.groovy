@@ -31,7 +31,7 @@ import org.artifactory.resource.*
 import org.artifactory.util.*
 import org.whitesource.utils.Constants
 import org.whitesource.agent.FileSystemScanner
-import org.whitesource.agent.ProjectConfiguration
+import org.whitesource.modules.ProjectConfiguration
 import org.whitesource.agent.api.dispatch.CheckPolicyComplianceRequest
 import org.whitesource.agent.api.dispatch.CheckPolicyComplianceResult
 import org.whitesource.agent.api.dispatch.GetDependencyDataResult
@@ -39,12 +39,12 @@ import org.whitesource.agent.api.dispatch.UpdateInventoryRequest
 import org.whitesource.agent.api.dispatch.UpdateInventoryResult
 import org.whitesource.agent.api.model.*
 import org.whitesource.agent.client.WhitesourceService
-import org.whitesource.fs.FSAConfigProperties
-import org.whitesource.fs.FSAConfiguration
+import org.whitesource.config.utils.FSAConfigProperties
+import org.whitesource.config.FSAConfiguration
 
 //import org.whitesource.fs.configuration.AgentConfiguration
-import org.whitesource.fs.configuration.ResolverConfiguration
-import org.whitesource.fs.configuration.*
+import org.whitesource.config.scan.config.ResolverConfiguration
+import org.whitesource.config.scan.config.*
 import org.whitesource.agent.api.dispatch.GetDependencyDataRequest
 
 import java.security.MessageDigest
@@ -492,6 +492,8 @@ private Collection<AgentProjectInfo> createProjects(Map<String, WssItemInfo> sha
     properties.put('php.resolveDependencies', "false")
     properties.put('html.resolveDependencies', "false")
     properties.put('cocoapods.resolveDependencies', "false")
+    properties.put('hex.resolveDependencies', "false")
+    properties.put('ant.resolveDependencies', "false")
 
     for (String key : sha1ToItemMap.keySet()) {
         DependencyInfo dependencyInfo = new DependencyInfo(key)
@@ -515,7 +517,8 @@ private Collection<AgentProjectInfo> createProjects(Map<String, WssItemInfo> sha
                 AgentConfiguration agentConfiguration = new AgentConfiguration(includesRepositoryContent, exclude, new String[0], new String[0],
                         archiveExtractionDepth, extensionsArray, new String[0], false,
                         FOLLOW_SYMLINKS, PARTIAL_SHA1_MATCH, false, false, false, CASE_SENSITIVE_GLOB,
-                        false, new LinkedList<String>(), new String[0], new String[0], new String[0], "", false)
+                        false, new LinkedList<String>(), new String[0], new String[0], new String[0], "", false,
+                        "DEFAULT", false, null, null, null, false)
 
                 ProjectConfiguration projectConfiguration = new ProjectConfiguration(agentConfiguration, Arrays.asList(compressedFilesFolderName), appPathsToDependencyDirs, false)
                 Collection<AgentProjectInfo> projectInfos = new FileSystemScanner(resolverConfiguration, fsaConfiguration.getAgent(), false)
