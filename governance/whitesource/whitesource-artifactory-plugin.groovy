@@ -163,7 +163,7 @@ jobs {
 
             // Get artifactory repositories names to scan from config file
             if (config.repoKeys.isEmpty()) {
-              List<String> repositories = repositories.getLocalRepositories()
+              String[] repositories = repositories.getLocalRepositories()
             } else {
               String[] repositories = config.repoKeys as String[]
             }
