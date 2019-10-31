@@ -162,11 +162,12 @@ jobs {
             CheckPolicyComplianceResult checkPoliciesResult = null
 
             // Get artifactory repositories names to scan from config file
-            if (config.repoKeys.isEmpty()) {
-              String[] repositories = repositories.getLocalRepositories()
+            if (config.repoKeys.size() == 0) {
+              String[] repositories = repositories.getLocalRepositories() as String[]
             } else {
               String[] repositories = config.repoKeys as String[]
             }
+            
             // Get archive files extraction depth, Archive extraction depth should be between 1 and 7
             // Default archive extraction depth is 2
             def archiveExtractionDepth = config.containsKey(ARCHIVE_EXTRACTION_DEPTH) ?
